@@ -29,7 +29,7 @@ const SMOOTHING_FACTOR = 0.6;
 const USE_GAUSSIAN_SPLAT = true; 
 
 const SPLAT_PATH_WINGS = new URL('./assets/wings.ksplat', import.meta.url).href;
-const WING_DOWNWARD_SHIFT = 0.2; 
+const WING_DOWNWARD_SHIFT = -0.2; 
 
 // *** CAMERA MODE: Changed from const to let to allow runtime switching ***
 let CAMERA_MODE = 'user'; // Starts with front/selfie camera
@@ -37,7 +37,7 @@ let CAMERA_MODE = 'user'; // Starts with front/selfie camera
 // --- AR SETTINGS (FIXED VALUES) ---
 const BACK_OFFSET_Z = -0.7; // Pushes the wings further back from the detection plane
 const WING_SPLAT_SCALE_FACTOR = 0.5; 
-const TEST_DEPTH_Z = -1.0; 
+const TEST_DEPTH_Z = -2.0; 
 const VIDEO_PLANE_DEPTH = -5.0; 
 
 // === DEBUG LOGGER CLASS (STANDARD - UNCHANGED) ===
