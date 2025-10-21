@@ -32,8 +32,8 @@ const USE_GAUSSIAN_SPLAT = true;
 const SPLAT_PATH_WINGS = new URL('./assets/wings.ksplat', import.meta.url).href;
 const WING_DOWNWARD_SHIFT = 0.2; 
 
-// *** CONFIRMED MODE: For laptop camera (selfie) - Change to 'environment' to point at others ***
-const CAMERA_MODE = 'user'; 
+// *** CAMERA MODE: Changed from const to let to allow runtime switching ***
+let CAMERA_MODE = 'user'; // Starts with front/selfie camera
 
 // --- AR SETTINGS (FIXED VALUES) ---
 const BACK_OFFSET_Z = -0.7; // Pushes the wings further back from the detection plane
@@ -92,47 +92,90 @@ class DebugLogger {
 }
 // === END DEBUG LOGGER CLASS ===
 
-// --- INITIALIZE & START AR (STANDARD - UNCHANGED) ---
+// --- CAMERA SWITCHING LOGIC (NEW) ---
+
+function setupCameraToggle() {
+    const toggleBtn = document.getElementById('camera-toggle-btn');
+    if (toggleBtn) {
+        toggleBtn.textContent = `Switch to ${CAMERA_MODE === 'user' ? 'Rear' : 'Front'} Camera`;
+        toggleBtn.addEventListener('click', switchCamera);
+    }
+}
+
+async function switchCamera() {
+    // 1. Log the change
+    debugLogger.log('info', `Switching camera from ${CAMERA_MODE} to ${CAMERA_MODE === 'user' ? 'environment' : 'user'}...`);
+    
+    // 2. Stop the current video stream
+    isRunning = false; // Halt the render loop temporarily
+    if (video && video.srcObject) {
+        const tracks = video.srcObject.getTracks();
+        tracks.forEach(track => track.stop());
+        video.srcObject = null;
+    }
+    
+    // 3. Toggle the CAMERA_MODE
+    CAMERA_MODE = CAMERA_MODE === 'user' ? 'environment' : 'user';
+
+    // 4. Update the button text immediately
+    const toggleBtn = document.getElementById('camera-toggle-btn');
+    if (toggleBtn) {
+        toggleBtn.textContent = `Switch to ${CAMERA_MODE === 'user' ? 'Rear' : 'Front'} Camera`;
+    }
+    
+    // 5. Restart the AR process by calling startAR()
+    await startAR();
+}
+
+// --- INITIALIZE & START AR (UPDATED INIT) ---
 function init() {
-    debugLogger = new DebugLogger();
-    debugLogger.log('info', '=== AR Back Wings Starting ===');
-    
-    if (typeof THREE === 'undefined' || typeof tf === 'undefined' || typeof poseDetection === 'undefined' || typeof SplatMesh === 'undefined') {
-        debugLogger.log('error', 'Module imports failed. Check console for module errors.');
-        document.getElementById('instructions').innerHTML = `
-            <h2>Initialization Failed!</h2>
-            <p>Error: Required libraries failed to load. Check console for module errors.</p>
-        `;
-        return;
-    }
-    debugLogger.log('success', 'Core libraries loaded (THREE, TF, Spark.js)');
+    debugLogger = new DebugLogger();
+    debugLogger.log('info', '=== AR Back Wings Starting ===');
+    
+    if (typeof THREE === 'undefined' || typeof tf === 'undefined' || typeof poseDetection === 'undefined' || typeof SplatMesh === 'undefined') {
+        debugLogger.log('error', 'Module imports failed. Check console for module errors.');
+        document.getElementById('instructions').innerHTML = `
+            <h2>Initialization Failed!</h2>
+            <p>Error: Required libraries failed to load. Check console for module errors.</p>
+        `;
+        return;
+    }
+    debugLogger.log('success', 'Core libraries loaded (THREE, TF, Spark.js)');
 
-    const startBtn = document.getElementById('start-btn');
-    const instructions = document.getElementById('instructions');
+    const startBtn = document.getElementById('start-btn');
+    const instructions = document.getElementById('instructions');
 
-    if (startBtn && instructions) {
-        startBtn.addEventListener('click', async () => {
-            instructions.classList.add('hidden');
-            await startAR();
-        });
-    }
+    if (startBtn && instructions) {
+        startBtn.addEventListener('click', async () => {
+            instructions.classList.add('hidden');
+            await startAR();
+            // Setup the toggle button ONLY after AR has successfully started once
+            setupCameraToggle(); 
+            const toggleBtn = document.getElementById('camera-toggle-btn');
+            if (toggleBtn) toggleBtn.style.display = 'block'; // Ensure the button is visible
+        });
+    }
 
-    debugLogger.updateStatus('Ready - Tap Start');
+    debugLogger.updateStatus('Ready - Tap Start');
 }
 
 async function startAR() {
     try {
         debugLogger.updateStatus('Initializing TensorFlow...');
-        tf.setBackend('webgl'); 
-        await tf.ready(); 
-        debugLogger.log('success', `TensorFlow backend ready (${tf.getBackend()}).`);
-
+        
+        // Only run TF setup on initial load, skip on camera switch to save time
+        if (poseModel === undefined) { 
+            tf.setBackend('webgl'); 
+            await tf.ready(); 
+            debugLogger.log('success', `TensorFlow backend ready (${tf.getBackend()}).`);
+        }
+        
         const threeContainer = document.getElementById('three-container');
         canvas = document.getElementById('output-canvas');
         ctx = canvas.getContext('2d');
         video = document.getElementById('video');
 
-        // 1. Request Camera Stream
+        // 1. Request Camera Stream using the current CAMERA_MODE
         const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: CAMERA_MODE, width: { ideal: 1280 }, height: { ideal: 720 } }
         });
@@ -142,7 +185,7 @@ async function startAR() {
         video.play().catch(error => {
             debugLogger.log('warning', `Video play() failed (often due to policy): ${error.message}`);
         }); 
-        debugLogger.updateVideoStatus('Camera stream active');
+        debugLogger.updateVideoStatus(`Camera stream active (${CAMERA_MODE})`);
 
         // 3. CRITICAL: Wait for video metadata to load before using dimensions
         await new Promise((resolve) => { video.onloadedmetadata = () => { resolve(video); }; });
@@ -155,29 +198,39 @@ async function startAR() {
         threeContainer.style.width = '100vw';
         threeContainer.style.height = '100vh';
 
+        // Remove old THREE.js renderer if it exists for a full restart
+        if (threeRendererInstance) {
+            threeContainer.removeChild(threeRendererInstance.domElement);
+            // Dispose of resources if needed, though a full page refresh is often safer
+            threeRendererInstance.dispose();
+            threeRendererInstance = null;
+        }
+
         debugLogger.updateStatus('Setting up 3D renderer...');
         setupThreeJS(vw, vh); 
         debugLogger.log('success', '3D renderer ready');
 
-        debugLogger.updateStatus('Loading AI model...');
-        poseModel = await poseDetection.createDetector(
-            poseDetection.SupportedModels.MoveNet,
-            { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
-        );
-        debugLogger.log('success', 'AI model loaded!');
-        debugLogger.updateStatus('Running - Stand back!');
-
+        // Only load AI model on initial load, skip on camera switch
+        if (poseModel === undefined) {
+            debugLogger.updateStatus('Loading AI model...');
+            poseModel = await poseDetection.createDetector(
+                poseDetection.SupportedModels.MoveNet,
+                { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
+            );
+            debugLogger.log('success', 'AI model loaded!');
+        }
+        
+        debugLogger.updateStatus('Running - Stand back!');
+        
         isRunning = true;
         renderLoop();
     } catch (error) {
         debugLogger.log('error', `INIT ERROR: ${error.name}: ${error.message}`);
         debugLogger.updateStatus('FATAL ERROR');
-        document.getElementById('instructions').classList.remove('hidden');
-        document.getElementById('instructions').innerHTML = `
-            <h2>Initialization Failed!</h2>
-            <p>Error: ${error.message}</p>
-            <p>This usually indicates a missing camera or permissions issue (Ensure HTTPS is active).</p>
-        `;
+        // If an error occurs during switch, ensure the instructions are still hidden 
+        // but re-show the toggle button if possible.
+        const instructions = document.getElementById('instructions');
+        if (instructions) instructions.classList.add('hidden');
     }
 }
 
@@ -186,6 +239,7 @@ function setupThreeJS(videoWidth, videoHeight) {
     const threeContainer = document.getElementById('three-container');
     const containerRect = threeContainer.getBoundingClientRect();
 
+    // Create a NEW renderer instance for the fresh camera stream
     const threeRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     threeRenderer.setPixelRatio(window.devicePixelRatio);
     threeRenderer.setSize(containerRect.width, containerRect.height);
@@ -196,9 +250,16 @@ function setupThreeJS(videoWidth, videoHeight) {
     
     new SparkRenderer(threeRenderer);
 
-    scene = new THREE.Scene();
+    // Reuse the existing scene, but clear the old video plane
+    if (scene) {
+        if (videoBackgroundPlane) scene.remove(videoBackgroundPlane);
+    } else {
+        scene = new THREE.Scene();
+    }
+    
     const aspect = containerRect.width / containerRect.height;
     
+    // Recreate camera for safety, though position shouldn't change
     camera = new THREE.PerspectiveCamera(65, aspect, 0.1, 100); 
     camera.position.set(0, 0, 0); 
     scene.add(new THREE.AmbientLight(0xffffff, 1.0));
@@ -206,6 +267,7 @@ function setupThreeJS(videoWidth, videoHeight) {
     // ----------------------------------------------------
     // *** CREATE VIDEO BACKGROUND PLANE ***
     // ----------------------------------------------------
+    // CRITICAL: The VideoTexture MUST be recreated with the new video stream
     const videoTexture = new THREE.VideoTexture(video);
     
     // We handle the flip via geometry scale below
@@ -216,7 +278,12 @@ function setupThreeJS(videoWidth, videoHeight) {
         videoTexture.wrapS = THREE.RepeatWrapping;
         videoTexture.offset.x = 1;
         videoTexture.repeat.x = -1;
-    } 
+    } else {
+        // Clear mirror settings for rear camera
+        videoTexture.wrapS = THREE.ClampToEdgeWrapping;
+        videoTexture.offset.x = 0;
+        videoTexture.repeat.x = 1;
+    }
 
     const planeGeometry = new THREE.PlaneGeometry(1, 1);
     
@@ -225,7 +292,7 @@ function setupThreeJS(videoWidth, videoHeight) {
     
     const planeMaterial = new THREE.MeshBasicMaterial({
         map: videoTexture,
-        // CRITICAL FIX 2: Set side to DoubleSide to ensure the plane renders (Missing Video Feed Fix)
+        // CRITICAL FIX 2: Set side to DoubleSide to ensure the plane renders
         side: THREE.DoubleSide, 
         depthTest: false // Render this layer first
     });
@@ -245,28 +312,35 @@ function setupThreeJS(videoWidth, videoHeight) {
     scene.add(videoBackgroundPlane);
 
     // ----------------------------------------------------
-    // *** ASSET LOADING LOGIC ***
+    // *** ASSET LOADING LOGIC (Only run on initial load) ***
     // ----------------------------------------------------
-    if (USE_GAUSSIAN_SPLAT && typeof SplatMesh !== 'undefined') {
-        debugLogger.updateAssetStatus(`Checking ${SPLAT_PATH_WINGS}...`);
+    if (!isSplatAttempted) {
+        if (USE_GAUSSIAN_SPLAT && typeof SplatMesh !== 'undefined') {
+            debugLogger.updateAssetStatus(`Checking ${SPLAT_PATH_WINGS}...`);
 
-        fetch(SPLAT_PATH_WINGS)
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`HTTP Error ${response.status}: Failed to fetch asset.`);
-                }
-                debugLogger.log('info', 'Asset resource check passed. Starting SplatMesh load.');
-                loadSplatModel();
-            })
-            .catch(err => {
-                debugLogger.log('error', `FATAL Asset Load Error: ${err.message}. Falling back to boxes.`);
-                createBoxWings();
-            });
+            fetch(SPLAT_PATH_WINGS)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP Error ${response.status}: Failed to fetch asset.`);
+                    }
+                    debugLogger.log('info', 'Asset resource check passed. Starting SplatMesh load.');
+                    loadSplatModel();
+                })
+                .catch(err => {
+                    debugLogger.log('error', `FATAL Asset Load Error: ${err.message}. Falling back to boxes.`);
+                    createBoxWings();
+                });
 
-        isSplatAttempted = true; 
-    } else {
-        createBoxWings();
-    }
+            isSplatAttempted = true; 
+        } else {
+            createBoxWings();
+        }
+    } else {
+        // If already loaded, just ensure the asset is added to the scene (useful on restart)
+        if (wingsAsset && !scene.children.includes(wingsAsset)) {
+            scene.add(wingsAsset);
+        }
+    }
 }
 // === END SETUP THREE.JS ===
 

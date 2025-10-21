@@ -11,10 +11,12 @@
 </head>
 <body>
     <div id="ar-container">
-    <video id="video" autoplay playsinline muted></video>
+        <video id="video" autoplay playsinline muted></video>
         <div id="three-container"></div>
         <canvas id="output-canvas"></canvas> 
     </div>
+
+    <button id="camera-toggle-btn" class="control-button" style="display: none;">Switch Camera</button> 
 
     <div id="instructions" class="overlay">
         <h2>AR Angel Wings Demo</h2>
@@ -23,20 +25,22 @@
         <p class="note">*Requires HTTPS/camera permissions. Load times vary.</p>
     </div>
 
-    <div id="debug-panel">
-        <button id="toggle-debug" class="unselectable">−</button>
+    <div id="debug-panel" class="minimized"> 
+        <button id="toggle-debug" class="unselectable">+</button>
         <button id="clear-debug" style="float: right;">Clear</button>
         
-        <strong>Status:</strong> <span id="status-text">Ready</span> | FPS: <span id="fps-counter">0.0</span><br>
-        
-        <div class="debug-status">Video: <span id="video-status"></span> | Model: <span id="model-status"></span></div>
-        <div class="debug-status">Pose: <span id="pose-status"></span> | Asset: <span id="asset-status"></span></div>
-        <div class="debug-status-line">
-            <strong>Position:</strong> <span id="position-status">N/A</span>
+        <div class="debug-content">
+            <strong>Status:</strong> <span id="status-text">Ready</span> | FPS: <span id="fps-counter">0.0</span><br>
+            
+            <div class="debug-status">Video: <span id="video-status"></span> | Model: <span id="model-status"></span></div>
+            <div class="debug-status">Pose: <span id="pose-status"></span> | Asset: <span id="asset-status"></span></div>
+            <div class="debug-status-line">
+                <strong>Position:</strong> <span id="position-status">N/A</span>
+            </div>
+            
+            <hr>
+            <div id="debug-logs"></div>
         </div>
-        
-        <hr>
-        <div id="debug-logs"></div>
     </div>
 </body>
 </html>
