@@ -14,7 +14,7 @@ let debugLogger;
 let isRunning = false;
 let frameCount = 0;
 let lastFpsUpdate = Date.now();
-let videoBackgroundPlane; // New: For 3D video texture
+let videoBackgroundPlane; 
 
 // --- STATE FLAGS ---
 let isSplatAttempted = false;
@@ -27,11 +27,13 @@ const SMOOTHING_FACTOR = 0.6;
 
 // Gaussian Splatting configuration
 const USE_GAUSSIAN_SPLAT = true; 
-const SPLAT_PATH_WINGS = './assets/wings.ksplat'; 
+
+// *** CRITICAL FIX: Use Vite's method to resolve the final asset path ***
+const SPLAT_PATH_WINGS = new URL('./assets/wings.ksplat', import.meta.url).href;
 const WING_DOWNWARD_SHIFT = 0.2; 
 
-// *** CONFIRMED MODE: For laptop camera (selfie) ***
-const CAMERA_MODE = 'environment'; 
+// *** CONFIRMED MODE: For laptop camera (selfie) - Change to 'environment' to point at others ***
+const CAMERA_MODE = 'user'; 
 
 // --- AR SETTINGS (FIXED VALUES) ---
 const BACK_OFFSET_Z = -0.7; // Pushes the wings further back from the detection plane
@@ -181,7 +183,6 @@ function setupThreeJS(videoWidth, videoHeight) {
     const threeRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     threeRenderer.setPixelRatio(window.devicePixelRatio);
     threeRenderer.setSize(containerRect.width, containerRect.height);
-    // Ensure GL background is transparent
     threeRenderer.setClearColor(0x000000, 0); 
     threeContainer.appendChild(threeRenderer.domElement);
 
@@ -192,30 +193,31 @@ function setupThreeJS(videoWidth, videoHeight) {
     scene = new THREE.Scene();
     const aspect = containerRect.width / containerRect.height;
     
-    // Use an FOV to match a typical camera (e.g., 60-75 degrees)
     camera = new THREE.PerspectiveCamera(65, aspect, 0.1, 100); 
     camera.position.set(0, 0, 0); 
     scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
     // ----------------------------------------------------
-    // *** NEW: CREATE VIDEO BACKGROUND PLANE ***
-    // Renders the live video feed as a 3D texture.
+    // *** CREATE VIDEO BACKGROUND PLANE ***
     // ----------------------------------------------------
     const videoTexture = new THREE.VideoTexture(video);
     
+    // Set flipY to false (or remove it) as we handle the flip via geometry scale
+    videoTexture.flipY = false; 
+
     if (CAMERA_MODE === 'user') {
-        // FIX: flipY = true corrects the upside-down orientation for selfie mode
-        videoTexture.flipY = true; 
-        // Mirror horizontally for selfie mode
+        // Horizontal Mirror for Selfie Mode:
         videoTexture.wrapS = THREE.RepeatWrapping;
         videoTexture.offset.x = 1;
         videoTexture.repeat.x = -1;
-    } else {
-        // Default flip for environment mode
-        videoTexture.flipY = false;
-    }
+    } 
 
     const planeGeometry = new THREE.PlaneGeometry(1, 1);
+    
+    // *** CRITICAL FIX: Scale the geometry's Y-axis by -1 to vertically flip the texture ***
+    // This is the most robust way to ensure the video is upright after the Vite build.
+    planeGeometry.scale(1, -1, 1); 
+    
     const planeMaterial = new THREE.MeshBasicMaterial({
         map: videoTexture,
         side: THREE.FrontSide,
@@ -330,7 +332,6 @@ async function renderLoop() {
     }
 
     // CRITICAL: Clear the 2D canvas. The video is now handled by the 3D plane.
-    // We only use the 2D canvas for debug points (z:3).
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // 2. Pose Detection Logic
