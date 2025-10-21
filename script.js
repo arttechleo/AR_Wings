@@ -20,9 +20,10 @@ let videoBackgroundPlane;
 // --- STATE FLAGS ---
 let isSplatAttempted = false;
 let isSplatDataReady = false; 
+let lastGoodPoseKeypoints = null; // 👈 CRITICAL: Stores the last known reliable pose data
 
 // *** PERFORMANCE OPTIMIZATION VARIABLES ***
-const POSE_DETECTION_SKIP_FRAMES = 3; // 👈 CRITICAL: Run AI only once every 3 frames
+const POSE_DETECTION_SKIP_FRAMES = 3; // Run AI only once every 3 frames
 let poseDetectionFrameCounter = 0; 
 // ******************************************
 
@@ -33,7 +34,7 @@ const SMOOTHING_FACTOR = 0.6;
 // Gaussian Splatting configuration
 const USE_GAUSSIAN_SPLAT = true; 
 
-// *** ASSET PATHS ***
+// *** ASSET PATHS (Ensure these files exist in your 'assets' folder) ***
 const SPLAT_PATH_LEFT_WING = new URL('./assets/leftwing.ksplat', import.meta.url).href;
 const SPLAT_PATH_RIGHT_WING = new URL('./assets/rightwing.ksplat', import.meta.url).href;
 
@@ -56,7 +57,7 @@ const VIDEO_PLANE_DEPTH = -10.0;
 const SPLAY_ANGLE = Math.PI / 12; 
 
 
-// === DEBUG LOGGER CLASS (UNCHANGED) ===
+// === DEBUG LOGGER CLASS (STANDARD - UNCHANGED) ===
 class DebugLogger {
     constructor() {
         this.logsContainer = document.getElementById('debug-logs');
@@ -134,8 +135,9 @@ async function switchCamera() {
         toggleBtn.textContent = `Switch to ${CAMERA_MODE === 'user' ? 'Rear' : 'Front'} Camera`;
     }
     
-    // Clear smoothed group position
+    // Clear smoothed group position and pose data
     smoothedGroupPosition = { x: 0, y: 0, z: 0 };
+    lastGoodPoseKeypoints = null;
 
     await startAR();
 }
@@ -157,7 +159,7 @@ function calculateResponsiveWingScale(videoWidth, videoHeight, baseScale) {
 }
 
 
-// --- POSE MODEL LOADING (NEW DEDICATED FUNCTION) ---
+// --- POSE MODEL LOADING (OPTIMIZED: DEDICATED FUNCTION) ---
 async function loadPoseModel() {
     if (poseModel === undefined) { 
         debugLogger.updateStatus('Initializing TensorFlow...');
@@ -414,7 +416,7 @@ function createBoxWings() {
     debugLogger.updateAssetStatus('Box placeholder active (Fallback)');
 }
 
-// === MAIN RENDER LOOP (OPTIMIZED) ===
+// === MAIN RENDER LOOP (OPTIMIZED AND CORRECTED) ===
 async function renderLoop() {
     if (!isRunning) return;
 
@@ -432,97 +434,113 @@ async function renderLoop() {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // --- POSE DETECTION LOGIC (THROTTLED) ---
-    let poses = [];
+    let wingsShouldBeVisible = false;
+    let currentPoseKeypoints = lastGoodPoseKeypoints; // Start with the last known data
+
+    // --- 1. THROTTLED POSE DETECTION ---
     if (video.readyState >= video.HAVE_ENOUGH_DATA && poseModel) {
         poseDetectionFrameCounter++;
 
-        // Only run the expensive AI operation every N frames
+        // Run the expensive AI operation only every N frames
         if (poseDetectionFrameCounter >= POSE_DETECTION_SKIP_FRAMES) {
             poseDetectionFrameCounter = 0; // Reset counter
             try {
-                // await is the bottleneck, now it runs less often.
-                poses = await poseModel.estimatePoses(video);
+                const newPoses = await poseModel.estimatePoses(video);
+
+                if (newPoses.length > 0) {
+                    const potentialKeypoints = newPoses[0].keypoints;
+                    const leftShoulder = potentialKeypoints.find(kp => kp.name === 'left_shoulder');
+                    const rightShoulder = potentialKeypoints.find(kp => kp.name === 'right_shoulder');
+                    
+                    // Only update and store if detection is high confidence
+                    if (leftShoulder && rightShoulder && leftShoulder.score > 0.4 && rightShoulder.score > 0.4) {
+                        lastGoodPoseKeypoints = potentialKeypoints; // 👈 Store the good data
+                        currentPoseKeypoints = potentialKeypoints; // Use the fresh data for this frame
+                        debugLogger.updatePoseStatus(`Detected (L:${leftShoulder.score.toFixed(2)}, R:${rightShoulder.score.toFixed(2)})`);
+                    } else {
+                        // Confidence is low, clear the stored pose
+                        lastGoodPoseKeypoints = null;
+                        currentPoseKeypoints = null;
+                        debugLogger.updatePoseStatus('Low confidence / Person too far');
+                    }
+                } else {
+                    // No person detected in this AI run
+                    lastGoodPoseKeypoints = null;
+                    currentPoseKeypoints = null;
+                    debugLogger.updatePoseStatus('No person detected');
+                }
             } catch (err) {
                 debugLogger.log('error', `Pose detection error: ${err.message}`);
+                // On error, let the wings fade out
+                lastGoodPoseKeypoints = null;
+                currentPoseKeypoints = null;
             }
         }
     }
     // --- END THROTTLED DETECTION ---
 
 
-    let wingsShouldBeVisible = false;
+    // --- 2. POSITIONING AND RENDERING LOGIC (Runs EVERY FRAME) ---
+    if (currentPoseKeypoints && isSplatDataReady) {
 
-    if (poses.length > 0) {
-        const keypoints = poses[0].keypoints;
+        wingsShouldBeVisible = true;
+        
+        const keypoints = currentPoseKeypoints; 
         const leftShoulder = keypoints.find(kp => kp.name === 'left_shoulder');
         const rightShoulder = keypoints.find(kp => kp.name === 'right_shoulder');
 
-        if (leftShoulder && rightShoulder && leftShoulder.score > 0.4 && rightShoulder.score > 0.4) {
-            
-            debugLogger.updatePoseStatus(`Detected (L:${leftShoulder.score.toFixed(2)}, R:${rightShoulder.score.toFixed(2)})`);
-            
-            if (wingsAssetLeft && wingsAssetRight && isSplatDataReady) {
-                
-                // 1. CALCULATE GROUP POSITION (Average of shoulders)
-                const avgShoulderX = (leftShoulder.x + rightShoulder.x) / 2;
-                const avgShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
-                
-                positionWingsGroup(wingsGroup, avgShoulderX, avgShoulderY);
-                
-                // 2. CALCULATE DYNAMIC WING OFFSET BASED ON SHOULDER SPAN
-                const normX = (coord, dim) => (coord / dim) * 2 - 1;
-                
-                const normXLeft = normX(leftShoulder.x, video.videoWidth);
-                const normXRight = normX(rightShoulder.x, video.videoWidth);
-                
-                let sxL = normXLeft;
-                let sxR = normXRight;
-                if (CAMERA_MODE === 'user') {
-                    sxL = -sxL;
-                    sxR = -sxR;
-                }
-                
-                const normalizedShoulderDistance = Math.abs(sxR - sxL);
-                let wingRootOffset = (normalizedShoulderDistance / 2.0) * SHOULDER_PIVOT_MULTIPLIER;
-                currentHorizontalOffset = Math.max(wingRootOffset, MIN_HORIZONTAL_OFFSET);
-                
-                // 3. CALCULATE GROUP ROTATION
-                const yDiff = leftShoulder.y - rightShoulder.y; 
-                let targetRotX = (yDiff / Y_DIFFERENCE_SENSITIVITY) * MAX_X_ROTATION;
-                targetRotX = THREE.MathUtils.clamp(targetRotX, -MAX_X_ROTATION, MAX_X_ROTATION);
-                
-                if (CAMERA_MODE === 'user') {
-                    targetRotX = -targetRotX; 
-                }
-                
-                wingsGroup.rotation.x += (targetRotX - wingsGroup.rotation.x) * SMOOTHING_FACTOR;
-
-                // 4. POSITION INDIVIDUAL WINGS RELATIVE TO GROUP CENTER
-                positionIndividualWing(wingsAssetLeft, 'left');
-                positionIndividualWing(wingsAssetRight, 'right');
-
-                wingsAssetLeft.visible = true;
-                wingsAssetRight.visible = true;
-                wingsShouldBeVisible = true;
-                debugLogger.updatePositionStatus(wingsAssetLeft.position, wingsAssetLeft.rotation, wingsAssetRight.position, wingsAssetRight.rotation);
-            } 
-            drawDebugPoints(ctx, [leftShoulder, rightShoulder]); 
-
-        } else {
-            debugLogger.updatePoseStatus('Low confidence');
+        // 1. CALCULATE GROUP POSITION
+        const avgShoulderX = (leftShoulder.x + rightShoulder.x) / 2;
+        const avgShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+        
+        positionWingsGroup(wingsGroup, avgShoulderX, avgShoulderY);
+        
+        // 2. CALCULATE DYNAMIC WING OFFSET 
+        const normX = (coord, dim) => (coord / dim) * 2 - 1;
+        
+        const normXLeft = normX(leftShoulder.x, video.videoWidth);
+        const normXRight = normX(rightShoulder.x, video.videoWidth);
+        
+        let sxL = normXLeft;
+        let sxR = normXRight;
+        if (CAMERA_MODE === 'user') {
+            sxL = -sxL;
+            sxR = -sxR;
         }
-    } else {
-        debugLogger.updatePoseStatus('No person detected');
+        
+        const normalizedShoulderDistance = Math.abs(sxR - sxL);
+        let wingRootOffset = (normalizedShoulderDistance / 2.0) * SHOULDER_PIVOT_MULTIPLIER;
+        currentHorizontalOffset = Math.max(wingRootOffset, MIN_HORIZONTAL_OFFSET);
+        
+        // 3. CALCULATE GROUP ROTATION
+        const yDiff = leftShoulder.y - rightShoulder.y; 
+        let targetRotX = (yDiff / Y_DIFFERENCE_SENSITIVITY) * MAX_X_ROTATION;
+        targetRotX = THREE.MathUtils.clamp(targetRotX, -MAX_X_ROTATION, MAX_X_ROTATION);
+        
+        if (CAMERA_MODE === 'user') {
+            targetRotX = -targetRotX; 
+        }
+        
+        // Apply smoothing to rotation and position
+        wingsGroup.rotation.x += (targetRotX - wingsGroup.rotation.x) * SMOOTHING_FACTOR;
+
+        // 4. POSITION INDIVIDUAL WINGS 
+        positionIndividualWing(wingsAssetLeft, 'left');
+        positionIndividualWing(wingsAssetRight, 'right');
+
+        // Draw debug points on the canvas 
+        drawDebugPoints(ctx, [leftShoulder, rightShoulder]); 
+
+        debugLogger.updatePositionStatus(wingsAssetLeft.position, wingsAssetLeft.rotation, wingsAssetRight.position, wingsAssetRight.rotation);
+    } 
+
+    // --- 3. FINAL VISIBILITY & RENDER ---
+    if (wingsAssetLeft && wingsAssetRight) {
+        // Toggle visibility based on whether we have a good pose
+        wingsAssetLeft.visible = wingsShouldBeVisible;
+        wingsAssetRight.visible = wingsShouldBeVisible;
     }
 
-    // Hide wings if no pose detected
-    if (!wingsShouldBeVisible) {
-        if(wingsAssetLeft) wingsAssetLeft.visible = false;
-        if(wingsAssetRight) wingsAssetRight.visible = false;
-    }
-
-    // 3. Render the scene (always runs)
     if (threeRendererInstance) {
         if (videoBackgroundPlane && videoBackgroundPlane.material.map) {
             videoBackgroundPlane.material.map.needsUpdate = true;
@@ -533,11 +551,9 @@ async function renderLoop() {
 // === END MAIN RENDER LOOP ===
 
 // === GROUP POSITIONING FUNCTION (UNCHANGED) ===
-
 function positionWingsGroup(group, avgKeypointX, avgKeypointY) {
     const depth = TEST_DEPTH_Z; 
     
-    // Convert canvas coordinates (0 to width/height) to normalized device coordinates (-1 to 1)
     const normX = (coord, dim) => (coord / dim) * 2 - 1;
     const normY = (coord, dim) => -(coord / dim) * 2 + 1; 
 
@@ -545,15 +561,11 @@ function positionWingsGroup(group, avgKeypointX, avgKeypointY) {
     let targetY = normY(avgKeypointY, video.videoHeight);
     let targetZ = depth; 
 
-    // 1. Compensate for video mirroring (front camera)
     if (CAMERA_MODE === 'user') {
         targetX = -targetX; 
     }
     
-    // 2. Apply VERTICAL SHIFT
     targetY -= (WING_VERTICAL_SHIFT * 1.0); 
-    
-    // 3. Apply Z Depth Offset 
     targetZ += BACK_OFFSET_Z; 
 
     // Apply Smoothing and set Position for the GROUP
@@ -593,7 +605,7 @@ function positionIndividualWing(wing, side) {
 
 // Draw Debug Points (OPTIMIZED)
 function drawDebugPoints(ctx, keypoints) {
-    // Moved ctx.fillStyle outside the loop for minor optimization
+    
     ctx.fillStyle = '#00ff88'; 
     keypoints.forEach(kp => {
         if (kp.score > 0.4) {
