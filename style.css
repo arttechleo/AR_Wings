@@ -1,5 +1,5 @@
 /* ================================== */
-/* GLOBAL & AR CONTAINER     */
+/* GLOBAL & AR CONTAINER     */
 /* ================================== */
 body { 
     margin: 0; 
@@ -45,7 +45,7 @@ body {
 } 
 
 /* ================================== */
-/* CAMERA TOGGLE BUTTON        */
+/* CAMERA TOGGLE BUTTON        */
 /* ================================== */
 
 #camera-toggle-btn {
@@ -68,7 +68,7 @@ body {
 }
 
 /* ================================== */
-/* INSTRUCTIONS & OVERLAY       */
+/* INSTRUCTIONS & OVERLAY       */
 /* ================================== */
 
 .overlay {
@@ -108,17 +108,16 @@ body {
 }
 
 /* ================================== */
-/* DEBUG PANEL (MOBILE FIX APPLIED)   */
+/* DEBUG PANEL (MOBILE RESPONSIVE)   */
 /* ================================== */
 
 #debug-panel { 
     position: fixed; 
-    bottom: 0; 
-    /* FIX 1: Use responsive width */
+    /* Use max() and safe-area-insets for better mobile/iOS compatibility */
+    bottom: max(10px, env(safe-area-inset-bottom)); 
     width: 90vw; 
     max-width: 300px; /* Limit max size on desktop */
-    /* FIX 2: Add padding from the right edge */
-    right: 5vw; 
+    right: max(5vw, env(safe-area-inset-right)); 
     
     max-height: 40vh; 
     background: rgba(0, 0, 0, 0.7); 
@@ -154,7 +153,7 @@ body {
 #toggle-debug { 
     position: absolute; 
     top: 0px; 
-    /* FIX 3: Anchor the toggle button to the panel's left edge */
+    /* Anchor the toggle button to the panel's left edge */
     left: 0px; 
     background: #000; 
     border: none; 
