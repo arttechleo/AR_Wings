@@ -132,13 +132,19 @@ async function startAR() {
         ctx = canvas.getContext('2d');
         video = document.getElementById('video');
 
+        // 1. Request Camera Stream
         const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: CAMERA_MODE, width: { ideal: 1280 }, height: { ideal: 720 } }
         });
         video.srcObject = stream;
-        video.play(); 
+        
+        // 2. CRITICAL: Attempt play() to ensure video starts immediately
+        video.play().catch(error => {
+            debugLogger.log('warning', `Video play() failed (often due to policy): ${error.message}`);
+        }); 
         debugLogger.updateVideoStatus('Camera stream active');
 
+        // 3. CRITICAL: Wait for video metadata to load before using dimensions
         await new Promise((resolve) => { video.onloadedmetadata = () => { resolve(video); }; });
 
         const vw = video.videoWidth;
@@ -170,7 +176,7 @@ async function startAR() {
         document.getElementById('instructions').innerHTML = `
             <h2>Initialization Failed!</h2>
             <p>Error: ${error.message}</p>
-            <p>Check if HTTPS is active and camera permissions are granted.</p>
+            <p>This usually indicates a missing camera or permissions issue (Ensure HTTPS is active).</p>
         `;
     }
 }
