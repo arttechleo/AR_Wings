@@ -36,10 +36,10 @@ const WING_DOWNWARD_SHIFT = 0.2;
 let CAMERA_MODE = 'user'; // Starts with front/selfie camera
 
 // --- AR SETTINGS (FIXED VALUES) ---
-const BACK_OFFSET_Z = -0.7; // Pushes the wings further back from the detection plane
+const BACK_OFFSET_Z = -0.7; 
 const WING_SPLAT_SCALE_FACTOR = 0.5; 
 const TEST_DEPTH_Z = -1.0; 
-const VIDEO_PLANE_DEPTH = -5.0; // Far back in 3D space to act as a background
+const VIDEO_PLANE_DEPTH = -5.0; 
 
 // === DEBUG LOGGER CLASS (STANDARD - UNCHANGED) ===
 class DebugLogger {
@@ -92,7 +92,7 @@ class DebugLogger {
 }
 // === END DEBUG LOGGER CLASS ===
 
-// --- CAMERA SWITCHING LOGIC (NEW) ---
+// --- CAMERA SWITCHING LOGIC ---
 
 function setupCameraToggle() {
     const toggleBtn = document.getElementById('camera-toggle-btn');
@@ -103,10 +103,8 @@ function setupCameraToggle() {
 }
 
 async function switchCamera() {
-    // 1. Log the change
     debugLogger.log('info', `Switching camera from ${CAMERA_MODE} to ${CAMERA_MODE === 'user' ? 'environment' : 'user'}...`);
     
-    // 2. Stop the current video stream
     isRunning = false; // Halt the render loop temporarily
     if (video && video.srcObject) {
         const tracks = video.srcObject.getTracks();
@@ -114,20 +112,17 @@ async function switchCamera() {
         video.srcObject = null;
     }
     
-    // 3. Toggle the CAMERA_MODE
     CAMERA_MODE = CAMERA_MODE === 'user' ? 'environment' : 'user';
 
-    // 4. Update the button text immediately
     const toggleBtn = document.getElementById('camera-toggle-btn');
     if (toggleBtn) {
         toggleBtn.textContent = `Switch to ${CAMERA_MODE === 'user' ? 'Rear' : 'Front'} Camera`;
     }
     
-    // 5. Restart the AR process by calling startAR()
     await startAR();
 }
 
-// --- INITIALIZE & START AR (UPDATED INIT) ---
+// --- INITIALIZE & START AR ---
 function init() {
     debugLogger = new DebugLogger();
     debugLogger.log('info', '=== AR Back Wings Starting ===');
@@ -149,10 +144,9 @@ function init() {
         startBtn.addEventListener('click', async () => {
             instructions.classList.add('hidden');
             await startAR();
-            // Setup the toggle button ONLY after AR has successfully started once
             setupCameraToggle(); 
             const toggleBtn = document.getElementById('camera-toggle-btn');
-            if (toggleBtn) toggleBtn.style.display = 'block'; // Ensure the button is visible
+            if (toggleBtn) toggleBtn.style.display = 'block'; 
         });
     }
 
@@ -163,7 +157,6 @@ async function startAR() {
     try {
         debugLogger.updateStatus('Initializing TensorFlow...');
         
-        // Only run TF setup on initial load, skip on camera switch to save time
         if (poseModel === undefined) { 
             tf.setBackend('webgl'); 
             await tf.ready(); 
@@ -181,13 +174,13 @@ async function startAR() {
         });
         video.srcObject = stream;
         
-        // 2. CRITICAL: Attempt play() to ensure video starts immediately
+        // 2. CRITICAL: Attempt play()
         video.play().catch(error => {
-            debugLogger.log('warning', `Video play() failed (often due to policy): ${error.message}`);
+            debugLogger.log('warning', `Video play() failed: ${error.message}`);
         }); 
         debugLogger.updateVideoStatus(`Camera stream active (${CAMERA_MODE})`);
 
-        // 3. CRITICAL: Wait for video metadata to load before using dimensions
+        // 3. CRITICAL: Wait for video metadata to load
         await new Promise((resolve) => { video.onloadedmetadata = () => { resolve(video); }; });
 
         const vw = video.videoWidth;
@@ -198,10 +191,9 @@ async function startAR() {
         threeContainer.style.width = '100vw';
         threeContainer.style.height = '100vh';
 
-        // Remove old THREE.js renderer if it exists for a full restart
+        // Remove old renderer and dispose of resources on camera switch
         if (threeRendererInstance) {
             threeContainer.removeChild(threeRendererInstance.domElement);
-            // Dispose of resources if needed, though a full page refresh is often safer
             threeRendererInstance.dispose();
             threeRendererInstance = null;
         }
@@ -210,7 +202,7 @@ async function startAR() {
         setupThreeJS(vw, vh); 
         debugLogger.log('success', '3D renderer ready');
 
-        // Only load AI model on initial load, skip on camera switch
+        // Only load AI model on initial load
         if (poseModel === undefined) {
             debugLogger.updateStatus('Loading AI model...');
             poseModel = await poseDetection.createDetector(
@@ -227,20 +219,17 @@ async function startAR() {
     } catch (error) {
         debugLogger.log('error', `INIT ERROR: ${error.name}: ${error.message}`);
         debugLogger.updateStatus('FATAL ERROR');
-        // If an error occurs during switch, ensure the instructions are still hidden 
-        // but re-show the toggle button if possible.
         const instructions = document.getElementById('instructions');
         if (instructions) instructions.classList.add('hidden');
     }
 }
 
-// === SETUP THREE.JS (CRITICAL CHANGES FOR VIDEO BACKGROUND) ===
+// === SETUP THREE.JS (Video Texture Mirroring) ===
 function setupThreeJS(videoWidth, videoHeight) {
     const threeContainer = document.getElementById('three-container');
     const containerRect = threeContainer.getBoundingClientRect();
 
-    // Create a NEW renderer instance for the fresh camera stream
-    const threeRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    const threeRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     threeRenderer.setPixelRatio(window.devicePixelRatio);
     threeRenderer.setSize(containerRect.width, containerRect.height);
     threeRenderer.setClearColor(0x000000, 0); 
@@ -250,7 +239,6 @@ function setupThreeJS(videoWidth, videoHeight) {
     
     new SparkRenderer(threeRenderer);
 
-    // Reuse the existing scene, but clear the old video plane
     if (scene) {
         if (videoBackgroundPlane) scene.remove(videoBackgroundPlane);
     } else {
@@ -258,8 +246,6 @@ function setupThreeJS(videoWidth, videoHeight) {
     }
     
     const aspect = containerRect.width / containerRect.height;
-    
-    // Recreate camera for safety, though position shouldn't change
     camera = new THREE.PerspectiveCamera(65, aspect, 0.1, 100); 
     camera.position.set(0, 0, 0); 
     scene.add(new THREE.AmbientLight(0xffffff, 1.0));
@@ -267,10 +253,7 @@ function setupThreeJS(videoWidth, videoHeight) {
     // ----------------------------------------------------
     // *** CREATE VIDEO BACKGROUND PLANE ***
     // ----------------------------------------------------
-    // CRITICAL: The VideoTexture MUST be recreated with the new video stream
     const videoTexture = new THREE.VideoTexture(video);
-    
-    // We handle the flip via geometry scale below
     videoTexture.flipY = false; 
 
     if (CAMERA_MODE === 'user') {
@@ -286,20 +269,16 @@ function setupThreeJS(videoWidth, videoHeight) {
     }
 
     const planeGeometry = new THREE.PlaneGeometry(1, 1);
-    
-    // CRITICAL FIX 1: Scale the geometry's Y-axis by -1 to vertically flip the texture (Upright Video)
-    planeGeometry.scale(1, -1, 1); 
+    planeGeometry.scale(1, -1, 1); // Vertical flip for upright video
     
     const planeMaterial = new THREE.MeshBasicMaterial({
         map: videoTexture,
-        // CRITICAL FIX 2: Set side to DoubleSide to ensure the plane renders
         side: THREE.DoubleSide, 
-        depthTest: false // Render this layer first
+        depthTest: false 
     });
     
     videoBackgroundPlane = new THREE.Mesh(planeGeometry, planeMaterial);
     
-    // Calculate the size the plane needs to be to fill the screen at VIDEO_PLANE_DEPTH
     const viewAspect = containerRect.width / containerRect.height;
     const fovRad = THREE.MathUtils.degToRad(camera.fov);
     const planeHeight = Math.abs(2 * Math.tan(fovRad / 2) * VIDEO_PLANE_DEPTH);
@@ -307,22 +286,17 @@ function setupThreeJS(videoWidth, videoHeight) {
 
     videoBackgroundPlane.scale.set(planeWidth, planeHeight, 1);
     videoBackgroundPlane.position.z = VIDEO_PLANE_DEPTH;
-    videoBackgroundPlane.renderOrder = 0; // Render first (background)
+    videoBackgroundPlane.renderOrder = 0; 
 
     scene.add(videoBackgroundPlane);
 
-    // ----------------------------------------------------
-    // *** ASSET LOADING LOGIC (Only run on initial load) ***
-    // ----------------------------------------------------
+    // ... (Asset loading logic remains the same) ...
     if (!isSplatAttempted) {
         if (USE_GAUSSIAN_SPLAT && typeof SplatMesh !== 'undefined') {
             debugLogger.updateAssetStatus(`Checking ${SPLAT_PATH_WINGS}...`);
-
             fetch(SPLAT_PATH_WINGS)
                 .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP Error ${response.status}: Failed to fetch asset.`);
-                    }
+                    if (!response.ok) throw new Error(`HTTP Error ${response.status}: Failed to fetch asset.`);
                     debugLogger.log('info', 'Asset resource check passed. Starting SplatMesh load.');
                     loadSplatModel();
                 })
@@ -330,13 +304,11 @@ function setupThreeJS(videoWidth, videoHeight) {
                     debugLogger.log('error', `FATAL Asset Load Error: ${err.message}. Falling back to boxes.`);
                     createBoxWings();
                 });
-
             isSplatAttempted = true; 
         } else {
             createBoxWings();
         }
     } else {
-        // If already loaded, just ensure the asset is added to the scene (useful on restart)
         if (wingsAsset && !scene.children.includes(wingsAsset)) {
             scene.add(wingsAsset);
         }
@@ -357,13 +329,11 @@ function loadSplatModel() {
                 isSplatDataReady = true; 
                 debugLogger.log('success', 'Gaussian Splat data loaded and ready!');
                 debugLogger.updateAssetStatus('Gaussian Splats active');
-                
-                // Z-inversion for Spark/Three.js camera alignment
                 mesh.scale.set(1, 1, -1); 
             }
         });
         wingsAsset.visible = false;
-        wingsAsset.renderOrder = 1; // Render second (in front of background)
+        wingsAsset.renderOrder = 1; 
 
         scene.add(wingsAsset);
         
@@ -395,13 +365,12 @@ function createBoxWings() {
     debugLogger.updateAssetStatus('Box placeholder active (Fallback)');
 }
 
-// === MAIN RENDER LOOP (UPDATED) ===
+// === MAIN RENDER LOOP (STANDARD - UNCHANGED) ===
 async function renderLoop() {
     if (!isRunning) return;
 
     requestAnimationFrame(renderLoop);
 
-    // FPS Counter (omitted for brevity)
     frameCount++;
     const now = Date.now();
     if (now - lastFpsUpdate >= 1000) {
@@ -411,7 +380,6 @@ async function renderLoop() {
         lastFpsUpdate = now;
     }
 
-    // CRITICAL: Clear the 2D canvas. The video is now handled by the 3D plane.
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // 2. Pose Detection Logic
@@ -441,7 +409,6 @@ async function renderLoop() {
                         wingsAsset.visible = false; 
                     }
 
-                    // Draw debug points to the now-transparent #output-canvas (z:3)
                     drawDebugPoints(ctx, [leftShoulder, rightShoulder]); 
 
                 } else {
@@ -457,9 +424,8 @@ async function renderLoop() {
         }
     }
 
-    // 3. Render the scene (This is where the depth sorting happens)
+    // 3. Render the scene
     if (threeRendererInstance) {
-        // Must manually update video texture in the loop
         if (videoBackgroundPlane && videoBackgroundPlane.material.map) {
             videoBackgroundPlane.material.map.needsUpdate = true;
         }
@@ -468,7 +434,7 @@ async function renderLoop() {
 }
 // === END MAIN RENDER LOOP ===
 
-// === HELPER FUNCTIONS (STANDARD - UNCHANGED) ===
+// === HELPER FUNCTIONS (CRITICAL FIXES HERE) ===
 
 function getSpineCenter(leftShoulder, rightShoulder, leftHip, rightHip) {
     let spineCenter = {
@@ -485,6 +451,7 @@ function getSpineCenter(leftShoulder, rightShoulder, leftHip, rightHip) {
 
 /**
  * Position, Scale, and Rotate the single wings asset based on the spine center.
+ * CRITICAL: Applies X-flip and Z-rotation inversion only for 'user' camera mode.
  */
 function positionSingleWingSet(wing, spineCenter, shoulderDist, bodyAngle) {
     
@@ -498,10 +465,11 @@ function positionSingleWingSet(wing, spineCenter, shoulderDist, bodyAngle) {
     let targetY = normY(spineCenter.y, video.videoHeight);
     let targetZ = depth; 
 
-    // Apply Camera Corrections & Depth Offset
+    // FIX 1: Apply X-flip for the front camera only to compensate for video mirroring.
     if (CAMERA_MODE === 'user') {
         targetX = -targetX; 
     }
+    
     targetY -= (WING_DOWNWARD_SHIFT * FIXED_SCALE); 
     targetZ += BACK_OFFSET_Z; 
 
@@ -517,7 +485,10 @@ function positionSingleWingSet(wing, spineCenter, shoulderDist, bodyAngle) {
 
     // Apply Rotation
     const targetRotX = 0; 
-    const targetRotY = Math.PI; // FLIP 180 degrees
+    const targetRotY = Math.PI; // FLIP 180 degrees (for initial orientation)
+    
+    // FIX 2: Invert the Z-rotation for the rear camera, as movement is naturally mirrored
+    // compared to the front camera (which is why the detection angle is inverted for 'user').
     const bodyRotationInfluence = CAMERA_MODE === 'user' ? bodyAngle : -bodyAngle; 
     const targetRotZ = bodyRotationInfluence * 1.0; 
     
@@ -528,7 +499,7 @@ function positionSingleWingSet(wing, spineCenter, shoulderDist, bodyAngle) {
     wing.rotation.set(smoothedRot.x, smoothedRot.y, smoothedRot.z);
 }
 
-// Draw Debug Points (Only draws on the topmost canvas)
+// Draw Debug Points 
 function drawDebugPoints(ctx, keypoints) {
     
     ctx.fillStyle = '#00ff88';
@@ -537,7 +508,7 @@ function drawDebugPoints(ctx, keypoints) {
             let x = kp.x;
             const y = kp.y;
             
-            // X-mirroring logic for debug points on top of selfie video
+            // X-mirroring logic for debug points
             if (CAMERA_MODE === 'user') {
                 x = canvas.width - x;
             }
