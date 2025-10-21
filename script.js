@@ -44,7 +44,7 @@ const WING_HORIZONTAL_OFFSET = 3.75;
 const MAX_X_ROTATION = Math.PI / 6; // Limit wing rotation to 30 degrees up/down
 const Y_DIFFERENCE_SENSITIVITY = 150; // Pixel difference in shoulder height to achieve max rotation
 
-let CAMERA_MODE = 'user'; // Starts with front/selfie camera
+let CAMERA_MODE = 'environment'; // Starts with front/selfie camera
 
 // --- AR SETTINGS (FIXED VALUES) ---
 // This is the Z-depth of the detection plane itself.
