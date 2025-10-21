@@ -39,11 +39,17 @@ const WING_SPLAT_SCALE_FACTOR_BASE = 1.8;
 // Dynamic scale applied during runtime
 let currentWingScale = WING_SPLAT_SCALE_FACTOR_BASE;
 
+// NEW: Base horizontal offset and dynamic variable for adjustment
+const BASE_HORIZONTAL_OFFSET = 3.75; 
+let currentHorizontalOffset = BASE_HORIZONTAL_OFFSET; // This will be calculated based on screen size
+
 // WING_VERTICAL_SHIFT determines how far DOWN (positive value) the wings pivot point is
 // from the detected shoulder mid-point.
 const WING_VERTICAL_SHIFT = 0.5; 
+
 // Minimal shift outward from the shoulder dot (determines shoulder-to-wing-root distance)
-const WING_HORIZONTAL_OFFSET = 3.75;
+// NOTE: WING_HORIZONTAL_OFFSET (3.75) is now BASE_HORIZONTAL_OFFSET
+// const WING_HORIZONTAL_OFFSET = 3.75; 
 
 // ROTATION CONSTANTS
 const MAX_X_ROTATION = Math.PI / 6; // Limit wing rotation to 30 degrees up/down
@@ -163,6 +169,24 @@ function calculateResponsiveWingScale(videoWidth, videoHeight, baseScale) {
     return baseScale * scaleAdjustment * Math.min(1.0, screenHeightFactor);
 }
 
+// === NEW: RESPONSIVE HORIZONTAL OFFSET ADJUSTMENT ===
+/**
+ * Calculates a dynamic horizontal offset to minimize wing spread on mobile/portrait screens.
+ */
+function calculateResponsiveHorizontalOffset(baseOffset) {
+    const isPortrait = window.innerWidth < window.innerHeight;
+    
+    if (isPortrait) {
+        // Reducing the spread by 25% for mobile/portrait screens to bring them closer to the body.
+        const mobileOffset = baseOffset * 0.75; 
+        return mobileOffset; 
+    }
+    
+    // For desktop/landscape, use a slight adjustment based on screen height for general stability.
+    const heightFactor = Math.min(1.0, window.innerHeight / 800);
+    return baseOffset * heightFactor;
+}
+
 // --- INITIALIZE & START AR (MODIFIED) ---
 
 function init() {
@@ -246,7 +270,8 @@ async function startAR() {
         
         // --- MOBILE SCALING IMPLEMENTATION ---
         currentWingScale = calculateResponsiveWingScale(vw, vh, WING_SPLAT_SCALE_FACTOR_BASE);
-        debugLogger.log('info', `Set initial wing scale to: ${currentWingScale.toFixed(2)}`);
+        currentHorizontalOffset = calculateResponsiveHorizontalOffset(BASE_HORIZONTAL_OFFSET); // <-- NEW CALCULATION
+        debugLogger.log('info', `Set initial wing scale to: ${currentWingScale.toFixed(2)}, Offset: ${currentHorizontalOffset.toFixed(2)}`); // <-- UPDATED LOG
         // --- END SCALING ---
 
         // Only load AI model on initial load
@@ -548,7 +573,7 @@ function positionWingsGroup(group, avgKeypointX, avgKeypointY) {
     group.position.set(smoothedGroupPosition.x, smoothedGroupPosition.y, smoothedGroupPosition.z);
 }
 
-// === INDIVIDUAL WING POSITIONING FUNCTION (USES DYNAMIC SCALE) ===
+// === INDIVIDUAL WING POSITIONING FUNCTION (USES DYNAMIC OFFSET) ===
 /**
  * Position and Scale a single wing asset relative to the wingsGroup center.
  */
@@ -557,13 +582,13 @@ function positionIndividualWing(wing, side) {
     // 1. Position RELATIVE to the Group Center (0,0,0 of the group is the average shoulder point)
     const FIXED_SCALE = 1.0; 
     
-    // The relative X position is based on the WING_HORIZONTAL_OFFSET
+    // The relative X position is based on the dynamically calculated offset (currentHorizontalOffset)
     if (side === 'left') {
         // Left wing moves positive X (right of center)
-        wing.position.set(WING_HORIZONTAL_OFFSET * FIXED_SCALE, 0, 0); 
+        wing.position.set(currentHorizontalOffset * FIXED_SCALE, 0, 0); 
     } else if (side === 'right') {
         // Right wing moves negative X (left of center)
-        wing.position.set(-WING_HORIZONTAL_OFFSET * FIXED_SCALE, 0, 0); 
+        wing.position.set(-currentHorizontalOffset * FIXED_SCALE, 0, 0); 
     }
     
     // 2. Apply Dynamic Scale
