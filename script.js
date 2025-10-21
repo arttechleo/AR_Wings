@@ -34,22 +34,16 @@ const SPLAT_PATH_LEFT_WING = new URL('./assets/leftwing.ksplat', import.meta.url
 const SPLAT_PATH_RIGHT_WING = new URL('./assets/rightwing.ksplat', import.meta.url).href;
 
 // --- CRITICAL WING CONSTANTS ---
-
-// BASE SCALE: General base scale for the virtual assets
+// BASE SCALE: Adjusted from 3.0 to a smaller value for mobile screens
 const WING_SPLAT_SCALE_FACTOR_BASE = 1.8; 
+// Dynamic scale applied during runtime
 let currentWingScale = WING_SPLAT_SCALE_FACTOR_BASE;
-
-// Dynamic variable now calculated based on shoulder distance in the render loop.
-let currentHorizontalOffset = 0; 
 
 // WING_VERTICAL_SHIFT determines how far DOWN (positive value) the wings pivot point is
 // from the detected shoulder mid-point.
 const WING_VERTICAL_SHIFT = 0.5; 
-
-// Multiplier used to place the wing root relative to the shoulder dot.
-// 0.5 would place the pivot exactly on the shoulder dot. 0.55 pushes it slightly outward.
-const SHOULDER_PIVOT_MULTIPLIER = 0.55; 
-const MIN_HORIZONTAL_OFFSET = 0.25; // Minimum offset for stability
+// Minimal shift outward from the shoulder dot (determines shoulder-to-wing-root distance)
+const WING_HORIZONTAL_OFFSET = 3.75;
 
 // ROTATION CONSTANTS
 const MAX_X_ROTATION = Math.PI / 6; // Limit wing rotation to 30 degrees up/down
@@ -109,7 +103,7 @@ class DebugLogger {
     updateFPS(fps) { if(this.fpsCounter) this.fpsCounter.textContent = fps.toFixed(1); }
     updatePositionStatus(posL, rotL, posR, rotR) {
         if (this.positionStatus) {
-            this.positionStatus.textContent = `L P: (${posL.x.toFixed(2)}, ${posL.y.toFixed(2)}) R P: (${posR.x.toFixed(2)}, ${posR.y.toFixed(2)}) Offset: ${currentHorizontalOffset.toFixed(2)}`;
+            this.positionStatus.textContent = `L P: (${posL.x.toFixed(2)}, ${posL.y.toFixed(2)}) R P: (${posR.x.toFixed(2)}, ${posR.y.toFixed(2)}) Z: ${posL.z.toFixed(2)}`;
         }
     }
 }
@@ -148,25 +142,26 @@ async function switchCamera() {
     await startAR();
 }
 
-// === WING SCALE ADJUSTMENT (REFINED) ===
-/**
- * Calculates a scale factor based on video aspect ratio to keep asset size sensible.
- */
+// === NEW: RESPONSIVE WING SCALE ADJUSTMENT ===
 function calculateResponsiveWingScale(videoWidth, videoHeight, baseScale) {
+    // Determine scale based on the visible size of the person (relative to screen).
+    // A full-screen person (tall) should have a smaller scale relative to their height.
     const aspect = videoWidth / videoHeight;
     let scaleAdjustment = 1.0;
     
-    if (aspect < 1.0) { // Portrait mode
+    // Adjust scale based on aspect ratio (e.g., taller screens need slightly smaller assets)
+    if (aspect < 1.0) { // Portrait mode (mobile)
         scaleAdjustment = 0.85; 
-    } else if (aspect > 1.7) { // Very wide screen
+    } else if (aspect > 1.7) { // Very wide screen (desktop/landscape)
         scaleAdjustment = 1.1; 
     }
     
-    const screenHeightFactor = window.innerHeight / 800;
+    // Further scale down if the actual window height is very small compared to a reference (e.g. debugging)
+    // This makes the scale generally appropriate for the display size.
+    const screenHeightFactor = window.innerHeight / 800; // Use 800px as a desktop reference
     
     return baseScale * scaleAdjustment * Math.min(1.0, screenHeightFactor);
 }
-
 
 // --- INITIALIZE & START AR (MODIFIED) ---
 
@@ -430,7 +425,7 @@ function createBoxWings() {
     debugLogger.updateAssetStatus('Box placeholder active (Fallback)');
 }
 
-// === MAIN RENDER LOOP (MODIFIED FOR DYNAMIC OFFSET) ===
+// === MAIN RENDER LOOP ===
 async function renderLoop() {
     if (!isRunning) return;
 
@@ -470,34 +465,7 @@ async function renderLoop() {
                         
                         positionWingsGroup(wingsGroup, avgShoulderX, avgShoulderY);
                         
-                        // 2. NEW: CALCULATE DYNAMIC WING OFFSET BASED ON SHOULDER SPAN
-                        
-                        // Helper to convert canvas coordinates to normalized 3D coordinates (-1 to 1)
-                        const normX = (coord, dim) => (coord / dim) * 2 - 1;
-                        
-                        const normXLeft = normX(leftShoulder.x, video.videoWidth);
-                        const normXRight = normX(rightShoulder.x, video.videoWidth);
-
-                        // Normalized shoulder X-coordinates in the 3D scene's frame of reference
-                        let sxL = normXLeft;
-                        let sxR = normXRight;
-                        if (CAMERA_MODE === 'user') {
-                            // Mirror the internal coordinates to match the mirrored group position
-                            sxL = -sxL;
-                            sxR = -sxR;
-                        }
-                        
-                        // Calculate the span in the 3D space (normalized X distance)
-                        const normalizedShoulderDistance = Math.abs(sxR - sxL);
-
-                        // Calculate the offset for each wing from the center pivot.
-                        // We use SHOULDER_PIVOT_MULTIPLIER (0.55) to place the wing root near the shoulder dot.
-                        let wingRootOffset = (normalizedShoulderDistance / 2.0) * SHOULDER_PIVOT_MULTIPLIER;
-
-                        // Ensure a minimum offset for stability if detection is very small
-                        currentHorizontalOffset = Math.max(wingRootOffset, MIN_HORIZONTAL_OFFSET);
-                        
-                        // 3. CALCULATE GROUP ROTATION
+                        // 2. CALCULATE GROUP ROTATION (Based on shoulder height difference)
                         const yDiff = leftShoulder.y - rightShoulder.y; 
                         let targetRotX = (yDiff / Y_DIFFERENCE_SENSITIVITY) * MAX_X_ROTATION;
                         targetRotX = THREE.MathUtils.clamp(targetRotX, -MAX_X_ROTATION, MAX_X_ROTATION);
@@ -509,7 +477,7 @@ async function renderLoop() {
                         // Apply smoothing to the rotation for stability
                         wingsGroup.rotation.x += (targetRotX - wingsGroup.rotation.x) * SMOOTHING_FACTOR;
 
-                        // 4. POSITION INDIVIDUAL WINGS RELATIVE TO GROUP CENTER
+                        // 3. POSITION INDIVIDUAL WINGS RELATIVE TO GROUP CENTER
                         positionIndividualWing(wingsAssetLeft, 'left');
                         positionIndividualWing(wingsAssetRight, 'right');
 
@@ -580,23 +548,22 @@ function positionWingsGroup(group, avgKeypointX, avgKeypointY) {
     group.position.set(smoothedGroupPosition.x, smoothedGroupPosition.y, smoothedGroupPosition.z);
 }
 
-// === INDIVIDUAL WING POSITIONING FUNCTION (USES DYNAMIC OFFSET) ===
+// === INDIVIDUAL WING POSITIONING FUNCTION (USES DYNAMIC SCALE) ===
 /**
- * Position and Scale a single wing asset relative to the wingsGroup center using the dynamic offset.
+ * Position and Scale a single wing asset relative to the wingsGroup center.
  */
 function positionIndividualWing(wing, side) {
     
     // 1. Position RELATIVE to the Group Center (0,0,0 of the group is the average shoulder point)
     const FIXED_SCALE = 1.0; 
     
-    // The relative X position is based on the dynamically calculated offset (currentHorizontalOffset)
-    // This value is now scaled to match the normalized shoulder distance.
+    // The relative X position is based on the WING_HORIZONTAL_OFFSET
     if (side === 'left') {
-        // Left wing moves positive X (right of center in 3D world space)
-        wing.position.set(currentHorizontalOffset * FIXED_SCALE, 0, 0); 
+        // Left wing moves positive X (right of center)
+        wing.position.set(WING_HORIZONTAL_OFFSET * FIXED_SCALE, 0, 0); 
     } else if (side === 'right') {
-        // Right wing moves negative X (left of center in 3D world space)
-        wing.position.set(-currentHorizontalOffset * FIXED_SCALE, 0, 0); 
+        // Right wing moves negative X (left of center)
+        wing.position.set(-WING_HORIZONTAL_OFFSET * FIXED_SCALE, 0, 0); 
     }
     
     // 2. Apply Dynamic Scale
