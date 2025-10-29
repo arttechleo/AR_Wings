@@ -1,46 +1,50 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>AR Gaussian Splatting Wings</title>
-    
-    <link rel="stylesheet" href="style.css">
-    
-    <script type="module" src="./script.js"></script>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<title>AR Gaussian Splatting Wings</title>
+<link rel="stylesheet" href="./style.css" />
+<script type="module" src="./src/main.js"></script>
 </head>
 <body>
-    <div id="ar-container">
-        <video id="video" autoplay playsinline muted></video>
-        <div id="three-container"></div>
-        <canvas id="output-canvas"></canvas> 
-    </div>
-<!-- Untill later -->
-    <button id="camera-toggle-btn" class="control-button" style="display: none;">Switch Camera</button> 
+<div id="ar-container">
+<video id="video" autoplay playsinline muted></video>
+<div id="three-container"></div>
+<canvas id="output-canvas"></canvas>
+</div>
 
-    <div id="instructions" class="overlay">
-        <h2>AR Angel Wings Demo</h2>
-        <p>Tap to start the camera and load the AI model.</p>
-        <button id="start-btn">START AR</button>
-        <p class="note">*Requires HTTPS/camera permissions. Load times vary.</p>
-    </div>
 
-    <div id="debug-panel" class="minimized"> 
-        <button id="toggle-debug" class="unselectable">+</button>
-        <button id="clear-debug" style="float: right;">Clear</button>
-        
-        <div class="debug-content">
-            <strong>Status:</strong> <span id="status-text">Ready</span> | FPS: <span id="fps-counter">0.0</span><br>
-            
-            <div class="debug-status">Video: <span id="video-status"></span> | Model: <span id="model-status"></span></div>
-            <div class="debug-status">Pose: <span id="pose-status"></span> | Asset: <span id="asset-status"></span></div>
-            <div class="debug-status-line">
-                <strong>Position:</strong> <span id="position-status">N/A</span>
-            </div>
-            
-            <hr>
-            <div id="debug-logs"></div>
-        </div>
-    </div>
+<button id="camera-toggle-btn" class="control-button" style="display: none;">Switch Camera</button>
+
+
+<div id="instructions" class="overlay">
+<h2>AR Angel Wings Demo</h2>
+<p>Tap to start the camera and load the AI models.</p>
+<button id="start-btn">START AR</button>
+<p class="note">*Requires HTTPS/camera permissions. Load times vary.</p>
+</div>
+
+
+<div id="debug-panel" class="minimized">
+<button id="toggle-debug" class="unselectable">+</button>
+<button id="clear-debug" style="float: right;">Clear</button>
+
+
+<div class="debug-content">
+<strong>Status:</strong> <span id="status-text">Ready</span> | FPS: <span id="fps-counter">0.0</span><br />
+
+
+<div class="debug-status">Video: <span id="video-status"></span> | Model: <span id="model-status"></span></div>
+<div class="debug-status">Pose: <span id="pose-status"></span> | Asset: <span id="asset-status"></span></div>
+<div class="debug-status-line">
+<strong>Position:</strong> <span id="position-status">N/A</span>
+</div>
+
+
+<hr />
+<div id="debug-logs"></div>
+</div>
+</div>
 </body>
 </html>
