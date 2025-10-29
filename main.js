@@ -1,11 +1,11 @@
-import { DebugLogger } from './utils/debug.js';
-import { startCamera, stopCamera, switchCamera, getFacingMode } from './systems/camera.js';
-import { createScene, updateVideoPlaneTexture, disposeRenderer } from './three/scene.js';
-import { WingsRig } from './three/wings.js';
-import { OcclusionMask } from './three/occlusion.js';
-import { PoseTracker } from './vision/pose.js';
-import { FaceGate } from './vision/face.js';
-import { Segmentation } from './vision/segmentation.js';
+import { DebugLogger } from './src/utils/debug.js';
+import { startCamera, stopCamera, switchCamera, getFacingMode } from './src/systems/camera.js';
+import { createScene, updateVideoPlaneTexture, disposeRenderer } from './src/three/scene.js';
+import { WingsRig } from './src/three/wings.js';
+import { OcclusionMask } from './src/three/occlusion.js';
+import { PoseTracker } from './src/vision/pose.js';
+import { FaceGate } from './src/vision/face.js';
+import { Segmentation } from './src/vision/segmentation.js';
 
 // ---- Global-ish UI refs ----
 const video = document.getElementById('video');

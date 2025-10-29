@@ -3,10 +3,10 @@ import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 // Optional ksplat fallback
 import { SplatMesh, SparkRenderer } from '@sparkjsdev/spark';
 
-const SPLAT_LEFT = new URL('../../assets/leftwing.ksplat', import.meta.url).href;
-const SPLAT_RIGHT = new URL('../../assets/rightwing.ksplat', import.meta.url).href;
-const PLY_LEFT = new URL('../../assets/leftwing.ply', import.meta.url).href;
-const PLY_RIGHT = new URL('../../assets/rightwing.ply', import.meta.url).href;
+const SPLAT_LEFT = new URL('./assets/leftwing.ksplat', import.meta.url).href;
+const SPLAT_RIGHT = new URL('./assets/rightwing.ksplat', import.meta.url).href;
+const PLY_LEFT = new URL('./assets/leftwing.ply', import.meta.url).href;
+const PLY_RIGHT = new URL('./assets/rightwing.ply', import.meta.url).href;
 
 // Tuning
 const WING_VERTICAL_SHIFT = 0.5;
