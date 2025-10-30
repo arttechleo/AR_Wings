@@ -2,13 +2,12 @@ import * as bodySegmentation from '@tensorflow-models/body-segmentation';
 
 export class Segmentation {
   static async create(debug) {
-    // Use MediaPipe Selfie Segmentation via CDN for speed
+    // Use BodyPix (TFJS runtime) to avoid Mediapipe WASM conflicts
     const segmenter = await bodySegmentation.createSegmenter(
-      bodySegmentation.SupportedModels.MediaPipeSelfieSegmentation,
+      bodySegmentation.SupportedModels.BodyPix,
       {
-        runtime: 'mediapipe',
-        solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation',
-        modelType: 'general',
+        runtime: 'tfjs',
+        // Defaults are fine; tweak for perf/quality if needed
       }
     );
     debug.log('success', 'Segmentation ready');

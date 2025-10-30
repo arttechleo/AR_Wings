@@ -2,12 +2,11 @@ import * as faceDetection from '@tensorflow-models/face-detection';
 
 export class FaceGate {
   static async create(debug) {
-    // Uses MediaPipe Face Detection via CDN (lightweight + fast)
+    // Use TFJS runtime to avoid Mediapipe WASM Module conflicts
     const detector = await faceDetection.createDetector(
       faceDetection.SupportedModels.MediaPipeFaceDetector,
       {
-        runtime: 'mediapipe',
-        solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/face_detection',
+        runtime: 'tfjs',
         modelType: 'short',
       }
     );
