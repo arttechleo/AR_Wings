@@ -4,12 +4,23 @@ function getVideoEl() {
 }
 
 export async function startCamera() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
+  let stream;
+  const tryConstraints = async (fm) => navigator.mediaDevices.getUserMedia({
+    video: { facingMode: fm, width: { ideal: 1280 }, height: { ideal: 720 } },
     audio: false,
   });
+  try {
+    stream = await tryConstraints(facingMode);
+  } catch (e) {
+    // Fallback to alternate camera if the requested one isn't available
+    const alt = facingMode === 'user' ? 'environment' : 'user';
+    try { stream = await tryConstraints(alt); facingMode = alt; } catch (e2) { throw e; }
+  }
   const video = getVideoEl();
   if (!video) throw new Error('Video element not found');
+  // Ensure attributes for autoplay across browsers
+  video.setAttribute('muted', 'true');
+  video.setAttribute('playsinline', 'true');
   video.srcObject = stream;
   await video.play().catch(() => {});
 }
