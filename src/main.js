@@ -8,11 +8,11 @@ import { FaceGate } from './vision/face.js';
 import { Segmentation } from './vision/segmentation.js';
 
 
-// ---- Global-ish UI refs ----
-const video = document.getElementById('video');
-const threeContainer = document.getElementById('three-container');
-const canvas2D = document.getElementById('output-canvas');
-const ctx2D = canvas2D.getContext('2d');
+// ---- Global-ish UI refs (assigned after DOMContentLoaded) ----
+let video;
+let threeContainer;
+let canvas2D;
+let ctx2D;
 
 
 // ---- Debug ----
@@ -50,6 +50,11 @@ const GROUP_DEPTH = -9.8; // occluder at -9.7 (slightly in front of wings)
 // ---------- Bootstrap ----------
 window.addEventListener('DOMContentLoaded', async () => {
   debug.log('info', '=== AR Wings (refactor) ===');
+  // Bind DOM refs now that the document is ready
+  video = document.getElementById('video');
+  threeContainer = document.getElementById('three-container');
+  canvas2D = document.getElementById('output-canvas');
+  ctx2D = canvas2D.getContext('2d');
   setupControls();
   debug.updateStatus('Loading models...');
 
