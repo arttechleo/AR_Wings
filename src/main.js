@@ -29,11 +29,12 @@ let lastFpsUpdate = performance.now();
 
 // Detection throttles - optimized for mobile (30fps target)
 const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-const POSE_SKIP = isMobile ? 6 : 3; let poseCounter = 0;
-const FACE_SKIP = isMobile ? 12 : 5; let faceCounter = 0;
-const SEGM_SKIP = isMobile ? 5 : 2; let segmCounter = 0;
+const POSE_SKIP = isMobile ? 8 : 3; let poseCounter = 0;
+const FACE_SKIP = isMobile ? 15 : 5; let faceCounter = 0;
+const SEGM_SKIP = isMobile ? 8 : 2; let segmCounter = 0;
 const RENDER_SKIP = 0; // Disabled - prefer other optimizations
 let renderCounter = 0;
+let lastSegmUpdate = 0;
 
 
 // Subsystems
@@ -108,31 +109,41 @@ async function start() {
     await startCamera();
     debug.updateVideoStatus(`Camera stream active (${getFacingMode()})`);
     
-    // Wait for video metadata
+    // Wait for video metadata (faster, with fallback)
     if (video.readyState < 2) {
       await new Promise((res, rej) => {
-        const timeout = setTimeout(() => rej(new Error('Video metadata timeout')), 5000);
+        const timeout = setTimeout(() => {
+          // Fallback: use default dimensions if metadata not ready
+          if (video.videoWidth && video.videoHeight) {
+            res();
+          } else {
+            // Use default mobile dimensions as fallback
+            res();
+          }
+        }, 2000); // Reduced from 5000ms
         video.onloadedmetadata = () => {
           clearTimeout(timeout);
           res();
         };
         video.onerror = () => {
           clearTimeout(timeout);
-          rej(new Error('Video element error'));
+          res(); // Continue even on error
         };
       });
     }
     
-    // Ensure video dimensions are valid
+    // Use actual or fallback dimensions (read-only properties, use variables instead)
+    let videoWidth = video.videoWidth || 640;
+    let videoHeight = video.videoHeight || 480;
     if (!video.videoWidth || !video.videoHeight) {
-      throw new Error('Video dimensions not available');
+      debug.log('warning', `Using fallback video dimensions: ${videoWidth}x${videoHeight}`);
     }
     
-    debug.log('info', `Video dimensions: ${video.videoWidth}x${video.videoHeight}`);
+    debug.log('info', `Video dimensions: ${videoWidth}x${videoHeight}`);
 
     // 2) Canvas sizes
-    canvas2D.width = video.videoWidth;
-    canvas2D.height = video.videoHeight;
+    canvas2D.width = videoWidth;
+    canvas2D.height = videoHeight;
 
     // 3) 3D setup
     debug.updateStatus('Initializing 3D scene...');
@@ -231,16 +242,18 @@ function loop(now) {
     segm.segment(video, getFacingMode()).catch(() => {});
   }
 
-  // Update occlusion mask texture (only when segmentation runs)
-  if (segmCounter === 0) {
+  // Update occlusion mask texture (only when segmentation runs, and less frequently)
+  if (segmCounter === 0 && (now - lastSegmUpdate > 200)) { // Only update every 200ms
+    lastSegmUpdate = now;
     const maskCanvas = segm.getMaskCanvas();
     if (maskCanvas) occluder.updateMask(maskCanvas, getFacingMode());
   }
 
-  // Decide visibility: face-gate
-  const faceOK = face.isFacePresent(0.7);
+  // Decide visibility: face-gate (relaxed for better UX)
+  const faceOK = face.isFacePresent(0.5); // Lowered from 0.7 to 0.5
   const hasShoulders = !!shoulders;
-  const wingsVisible = faceOK && (hasShoulders || wings.hasLastAnchor());
+  // Show wings if we have shoulders OR last anchor (even without face initially)
+  const wingsVisible = hasShoulders || (wings.hasLastAnchor() && faceOK);
 
   // Anchor + position
   if (hasShoulders) {

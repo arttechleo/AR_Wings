@@ -37,17 +37,21 @@ export class WingsRig {
   async loadAssets(renderer) {
     // Try ksplat first (priority)
     try {
+      this.debug.updateAssetStatus('Loading ksplat wings...');
       await this._loadSplat(renderer);
-      this.debug.updateAssetStatus('ksplat wings loaded');
+      this.debug.updateAssetStatus('✓ ksplat wings loaded');
+      this.debug.log('success', 'Ksplat wings successfully loaded');
       return;
     } catch (e) {
-      this.debug.log('warning', `ksplat load failed (${e?.message}). Trying PLY fallback...`);
+      this.debug.log('error', `ksplat load failed: ${e?.message}. Trying PLY fallback...`);
+      this.debug.updateAssetStatus(`ksplat failed: ${e?.message}`);
     }
     
     // Try PLY as fallback
     try {
+      this.debug.updateAssetStatus('Loading PLY wings...');
       await this._loadPLY();
-      this.debug.updateAssetStatus('.PLY wings loaded');
+      this.debug.updateAssetStatus('✓ PLY wings loaded');
       return;
     } catch (e) {
       this.debug.log('warning', `PLY load failed (${e?.message}). Falling back to boxes.`);
@@ -93,16 +97,41 @@ export class WingsRig {
       this.debug.log('warning', `SparkRenderer init warning: ${e?.message}`);
     }
 
+    // Verify files exist first
+    try {
+      const [leftRes, rightRes] = await Promise.all([
+        fetch(SPLAT_LEFT, { method: 'HEAD' }).catch(() => null),
+        fetch(SPLAT_RIGHT, { method: 'HEAD' }).catch(() => null)
+      ]);
+      
+      if (!leftRes || !leftRes.ok) {
+        throw new Error(`Left wing file not found: ${SPLAT_LEFT}`);
+      }
+      if (!rightRes || !rightRes.ok) {
+        throw new Error(`Right wing file not found: ${SPLAT_RIGHT}`);
+      }
+      
+      this.debug.log('info', 'Ksplat files verified, starting load...');
+    } catch (e) {
+      throw new Error(`File verification failed: ${e.message}`);
+    }
+
     // Create SplatMesh instances with onLoad callbacks
     let leftLoaded = false;
     let rightLoaded = false;
+    let leftError = null;
+    let rightError = null;
     
     this.left = new SplatMesh({ 
       url: SPLAT_LEFT, 
       fileType: 'ksplat',
       onLoad: () => {
         leftLoaded = true;
-        this.debug.log('info', 'Left wing ksplat loaded');
+        this.debug.log('success', 'Left wing ksplat loaded');
+      },
+      onError: (err) => {
+        leftError = err;
+        this.debug.log('error', `Left wing load error: ${err}`);
       }
     });
     
@@ -111,7 +140,11 @@ export class WingsRig {
       fileType: 'ksplat',
       onLoad: () => {
         rightLoaded = true;
-        this.debug.log('info', 'Right wing ksplat loaded');
+        this.debug.log('success', 'Right wing ksplat loaded');
+      },
+      onError: (err) => {
+        rightError = err;
+        this.debug.log('error', `Right wing load error: ${err}`);
       }
     });
     
@@ -129,29 +162,34 @@ export class WingsRig {
           resolve();
           return true;
         }
+        if (leftError && rightError) {
+          reject(new Error(`Both wings failed: Left: ${leftError}, Right: ${rightError}`));
+          return true;
+        }
         return false;
       };
       
       // Check immediately in case they're already loaded
       if (checkLoaded()) return;
       
-      // Poll for loaded status (SplatMesh might set a property)
+      // Poll for loaded status
       const pollInterval = setInterval(() => {
         if (checkLoaded()) {
           clearInterval(pollInterval);
           clearTimeout(timeout);
         }
-      }, 100);
+      }, 200); // Poll every 200ms
       
-      // Timeout after 15 seconds
+      // Timeout after 20 seconds (increased for large files)
       const timeout = setTimeout(() => {
         clearInterval(pollInterval);
         if (leftLoaded && rightLoaded) {
           resolve();
         } else {
-          reject(new Error(`Ksplat load timeout - Left: ${leftLoaded}, Right: ${rightLoaded}`));
+          const status = `Left: ${leftLoaded ? 'loaded' : leftError || 'timeout'}, Right: ${rightLoaded ? 'loaded' : rightError || 'timeout'}`;
+          reject(new Error(`Ksplat load timeout - ${status}`));
         }
-      }, 15000);
+      }, 20000);
     });
   }
 
@@ -167,9 +205,15 @@ export class WingsRig {
   }
 
   setVisible(v) {
-    if (!this.left || !this.right) return;
+    if (!this.left || !this.right) {
+      this.debug?.log('warning', `Cannot set visibility - wings not loaded (left: ${!!this.left}, right: ${!!this.right})`);
+      return;
+    }
     this.left.visible = v;
     this.right.visible = v;
+    if (v && this.debug) {
+      this.debug.log('info', `Wings visibility set to: ${v}`);
+    }
   }
    hasLastAnchor() { return !!this.lastAnchor; }
 

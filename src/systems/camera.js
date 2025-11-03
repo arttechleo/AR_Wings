@@ -51,19 +51,29 @@ export async function startCamera() {
   
   video.srcObject = stream;
   
-  // Wait for video to be ready and play
+  // Wait for video to be ready and play (faster timeout)
   return new Promise((resolve, reject) => {
+    // Check if already loaded
+    if (video.readyState >= 2) {
+      video.play().then(() => resolve()).catch(() => resolve());
+      return;
+    }
+    
+    const timeout = setTimeout(() => {
+      // Continue anyway - stream is active
+      resolve();
+    }, 2000); // Reduced from 1000ms to 2000ms but faster initial check
+    
     video.onloadedmetadata = () => {
+      clearTimeout(timeout);
       video.play()
         .then(() => resolve())
-        .catch(err => {
-          console.warn('Video play() failed, continuing anyway:', err);
-          resolve(); // Continue even if play() fails - stream is active
-        });
+        .catch(() => resolve()); // Continue even if play() fails
     };
-    video.onerror = () => reject(new Error('Video element error'));
-    // Timeout fallback
-    setTimeout(() => resolve(), 1000);
+    video.onerror = () => {
+      clearTimeout(timeout);
+      reject(new Error('Video element error'));
+    };
   });
 }
 
