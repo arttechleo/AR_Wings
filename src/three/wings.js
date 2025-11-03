@@ -34,21 +34,24 @@ export class WingsRig {
     this.group.position.z = -9.9;
   }
 
-  async loadAssets() {
-    // Try PLY first
+  async loadAssets(renderer) {
+    // Try ksplat first (priority)
+    try {
+      await this._loadSplat(renderer);
+      this.debug.updateAssetStatus('ksplat wings loaded');
+      return;
+    } catch (e) {
+      this.debug.log('warning', `ksplat load failed (${e?.message}). Trying PLY fallback...`);
+    }
+    
+    // Try PLY as fallback
     try {
       await this._loadPLY();
       this.debug.updateAssetStatus('.PLY wings loaded');
       return;
     } catch (e) {
-      this.debug.log('warning', `PLY load failed (${e?.message}). Falling back to ksplat/boxes.`);
+      this.debug.log('warning', `PLY load failed (${e?.message}). Falling back to boxes.`);
     }
- // Try ksplat
-    try {
-      await this._loadSplat();
-      this.debug.updateAssetStatus('ksplat wings loaded');
-      return;
-    } catch (e) {}
 
     // Fallback cube wings
     this._loadBoxes();
@@ -77,26 +80,79 @@ export class WingsRig {
     this.group.add(this.left);
     this.group.add(this.right);
   }
- async _loadSplat() {
-    // Ensure Spark renderer is attached (no-op if already)
-    const fakeRenderer = this._findRenderer();
-    if (fakeRenderer) new SparkRenderer(fakeRenderer);
+  async _loadSplat(renderer) {
+    if (!renderer) {
+      throw new Error('Renderer required for ksplat loading');
+    }
+    
+    // Initialize SparkRenderer with actual Three.js renderer
+    try {
+      new SparkRenderer(renderer);
+      this.debug.log('info', 'SparkRenderer initialized');
+    } catch (e) {
+      this.debug.log('warning', `SparkRenderer init warning: ${e?.message}`);
+    }
 
-    this.left = new SplatMesh({ url: SPLAT_LEFT, fileType: 'ksplat' });
-    this.right = new SplatMesh({ url: SPLAT_RIGHT, fileType: 'ksplat' });
+    // Create SplatMesh instances with onLoad callbacks
+    let leftLoaded = false;
+    let rightLoaded = false;
+    
+    this.left = new SplatMesh({ 
+      url: SPLAT_LEFT, 
+      fileType: 'ksplat',
+      onLoad: () => {
+        leftLoaded = true;
+        this.debug.log('info', 'Left wing ksplat loaded');
+      }
+    });
+    
+    this.right = new SplatMesh({ 
+      url: SPLAT_RIGHT, 
+      fileType: 'ksplat',
+      onLoad: () => {
+        rightLoaded = true;
+        this.debug.log('info', 'Right wing ksplat loaded');
+      }
+    });
+    
     this.left.visible = this.right.visible = false;
     this.left.renderOrder = this.right.renderOrder = 2;
+    
     this.group.add(this.left);
     this.group.add(this.right);
-  }
-
-  _findRenderer() {
-    // crude way to find a WebGLRenderer from the scene graph owner document
-    const canvases = document.querySelectorAll('canvas');
-    for (const c of canvases) {
-      if (c?.getContext && c.getContext('webgl')) return { domElement: c, setSize() {}, setPixelRatio() {}, dispose() {} };
-    }
-    return null;
+    
+    // Wait for both to load with timeout
+    await new Promise((resolve, reject) => {
+      const checkLoaded = () => {
+        if (leftLoaded && rightLoaded) {
+          this.debug.log('success', 'Both ksplat wings loaded');
+          resolve();
+          return true;
+        }
+        return false;
+      };
+      
+      // Check immediately in case they're already loaded
+      if (checkLoaded()) return;
+      
+      // Poll for loaded status (SplatMesh might set a property)
+      const pollInterval = setInterval(() => {
+        if (checkLoaded()) {
+          clearInterval(pollInterval);
+          clearTimeout(timeout);
+        }
+      }, 100);
+      
+      // Timeout after 15 seconds
+      const timeout = setTimeout(() => {
+        clearInterval(pollInterval);
+        if (leftLoaded && rightLoaded) {
+          resolve();
+        } else {
+          reject(new Error(`Ksplat load timeout - Left: ${leftLoaded}, Right: ${rightLoaded}`));
+        }
+      }, 15000);
+    });
   }
 
   _loadBoxes() {

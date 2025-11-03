@@ -5,12 +5,16 @@ export function createScene({ video, container, videoPlaneDepth = -10, debug }) 
   const width = window.innerWidth || container.clientWidth || 640;
   const height = window.innerHeight || container.clientHeight || 480;
 
+  // Optimize renderer settings for mobile
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
   const renderer = new THREE.WebGLRenderer({ 
     alpha: true, 
-    antialias: true,
+    antialias: !isMobile, // Disable antialiasing on mobile for performance
     powerPreference: 'high-performance'
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); // Cap for mobile
+  // Lower pixel ratio on mobile for better performance
+  const pixelRatio = isMobile ? Math.min(window.devicePixelRatio || 1, 1.2) : Math.min(window.devicePixelRatio || 1, 2);
+  renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height);
   renderer.setClearColor(0x000000, 0);
   

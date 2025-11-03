@@ -27,10 +27,13 @@ let frameCount = 0;
 let lastFpsUpdate = performance.now();
 
 
-// Detection throttles
-const POSE_SKIP = 3; let poseCounter = 0;
-const FACE_SKIP = 5; let faceCounter = 0;
-const SEGM_SKIP = 2; let segmCounter = 0;
+// Detection throttles - optimized for mobile (30fps target)
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+const POSE_SKIP = isMobile ? 6 : 3; let poseCounter = 0;
+const FACE_SKIP = isMobile ? 12 : 5; let faceCounter = 0;
+const SEGM_SKIP = isMobile ? 5 : 2; let segmCounter = 0;
+const RENDER_SKIP = 0; // Disabled - prefer other optimizations
+let renderCounter = 0;
 
 
 // Subsystems
@@ -143,7 +146,7 @@ async function start() {
     threeContainer.style.left = '0';
     
     wings = new WingsRig({ scene: three.scene, debug });
-    await wings.loadAssets();
+    await wings.loadAssets(three.renderer);
 
     occluder = new OcclusionMask({
       scene: three.scene,
@@ -190,6 +193,10 @@ function loop(now) {
   if (!isRunning) return;
   requestAnimationFrame(loop);
 
+  // Frame skipping for mobile performance (only skip rendering, not detection)
+  renderCounter++;
+  const shouldRender = RENDER_SKIP === 0 || renderCounter % (RENDER_SKIP + 1) === 0;
+
   // FPS
   frameCount++;
   if (now - lastFpsUpdate >= 1000) {
@@ -198,32 +205,37 @@ function loop(now) {
     lastFpsUpdate = now;
   }
 
-  // Update 2D canvas
-  ctx2D.clearRect(0, 0, canvas2D.width, canvas2D.height);
+  // Update 2D canvas (only when rendering)
+  if (shouldRender) {
+    ctx2D.clearRect(0, 0, canvas2D.width, canvas2D.height);
+  }
 
-  // Throttled detections
+  // Throttled detections (run asynchronously, don't block render)
   let shoulders = pose.getLastShoulders();
   poseCounter++;
   if (poseCounter >= POSE_SKIP) {
     poseCounter = 0;
-    pose.estimate(video, getFacingMode());
+    // Don't await - let it run in background
+    pose.estimate(video, getFacingMode()).catch(() => {});
   }
 
   faceCounter++;
   if (faceCounter >= FACE_SKIP) {
     faceCounter = 0;
-    face.estimate(video, getFacingMode());
+    face.estimate(video, getFacingMode()).catch(() => {});
   }
 
   segmCounter++;
   if (segmCounter >= SEGM_SKIP) {
     segmCounter = 0;
-    segm.segment(video, getFacingMode());
+    segm.segment(video, getFacingMode()).catch(() => {});
   }
 
-  // Update occlusion mask texture
-  const maskCanvas = segm.getMaskCanvas();
-  if (maskCanvas) occluder.updateMask(maskCanvas, getFacingMode());
+  // Update occlusion mask texture (only when segmentation runs)
+  if (segmCounter === 0) {
+    const maskCanvas = segm.getMaskCanvas();
+    if (maskCanvas) occluder.updateMask(maskCanvas, getFacingMode());
+  }
 
   // Decide visibility: face-gate
   const faceOK = face.isFacePresent(0.7);
@@ -240,20 +252,25 @@ function loop(now) {
       videoHeight: video.videoHeight,
       facingMode: getFacingMode(),
     });
-    // debug dots
-    drawPoint(ctx2D, left.x, left.y, '#00ff88');
-    drawPoint(ctx2D, right.x, right.y, '#00ff88');
+    // debug dots (only when rendering)
+    if (shouldRender) {
+      drawPoint(ctx2D, left.x, left.y, '#00ff88');
+      drawPoint(ctx2D, right.x, right.y, '#00ff88');
+    }
   }
   wings.setVisible(wingsVisible);
 
-  // Render 3D - ensure video texture updates
-  if (three?.videoPlane?.material?.map) {
-    updateVideoPlaneTexture(three.videoPlane);
-    // Force texture update every frame for mobile
-    three.videoPlane.material.map.needsUpdate = true;
-  }
-  if (three?.renderer) {
-    three.renderer.render(three.scene, three.camera);
+  // Render 3D - optimize texture updates (only when we actually render)
+  if (shouldRender) {
+    if (three?.videoPlane?.material?.map) {
+      // Only update texture when video has new frame
+      if (video.readyState >= video.HAVE_CURRENT_DATA) {
+        three.videoPlane.material.map.needsUpdate = true;
+      }
+    }
+    if (three?.renderer) {
+      three.renderer.render(three.scene, three.camera);
+    }
   }
 }
 
