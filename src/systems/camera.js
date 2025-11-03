@@ -5,24 +5,66 @@ function getVideoEl() {
 
 export async function startCamera() {
   let stream;
-  const tryConstraints = async (fm) => navigator.mediaDevices.getUserMedia({
-    video: { facingMode: fm, width: { ideal: 1280 }, height: { ideal: 720 } },
-    audio: false,
-  });
+  // Mobile-friendly constraints with fallbacks
+  const tryConstraints = async (fm) => {
+    // Try with ideal resolution first
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        video: { 
+          facingMode: fm, 
+          width: { ideal: 1280, min: 640 }, 
+          height: { ideal: 720, min: 480 } 
+        },
+        audio: false,
+      });
+    } catch (e) {
+      // Fallback to basic constraints (mobile-friendly)
+      return await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: fm },
+        audio: false,
+      });
+    }
+  };
+  
   try {
     stream = await tryConstraints(facingMode);
   } catch (e) {
     // Fallback to alternate camera if the requested one isn't available
     const alt = facingMode === 'user' ? 'environment' : 'user';
-    try { stream = await tryConstraints(alt); facingMode = alt; } catch (e2) { throw e; }
+    try { 
+      stream = await tryConstraints(alt); 
+      facingMode = alt; 
+    } catch (e2) { 
+      throw new Error(`Camera access failed: ${e.message}. Tried both cameras.`); 
+    }
   }
+  
   const video = getVideoEl();
   if (!video) throw new Error('Video element not found');
-  // Ensure attributes for autoplay across browsers
+  
+  // Ensure attributes for autoplay across browsers (critical for mobile)
   video.setAttribute('muted', 'true');
   video.setAttribute('playsinline', 'true');
+  video.setAttribute('autoplay', 'true');
+  video.muted = true;
+  video.playsInline = true;
+  
   video.srcObject = stream;
-  await video.play().catch(() => {});
+  
+  // Wait for video to be ready and play
+  return new Promise((resolve, reject) => {
+    video.onloadedmetadata = () => {
+      video.play()
+        .then(() => resolve())
+        .catch(err => {
+          console.warn('Video play() failed, continuing anyway:', err);
+          resolve(); // Continue even if play() fails - stream is active
+        });
+    };
+    video.onerror = () => reject(new Error('Video element error'));
+    // Timeout fallback
+    setTimeout(() => resolve(), 1000);
+  });
 }
 
 export function stopCamera() {

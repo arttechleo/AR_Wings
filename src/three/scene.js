@@ -1,35 +1,61 @@
 import * as THREE from 'three';
 
 export function createScene({ video, container, videoPlaneDepth = -10, debug }) {
-  const containerRect = container.getBoundingClientRect();
+  // Use viewport dimensions for mobile compatibility
+  const width = window.innerWidth || container.clientWidth || 640;
+  const height = window.innerHeight || container.clientHeight || 480;
 
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-  renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.setSize(containerRect.width, containerRect.height);
+  const renderer = new THREE.WebGLRenderer({ 
+    alpha: true, 
+    antialias: true,
+    powerPreference: 'high-performance'
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); // Cap for mobile
+  renderer.setSize(width, height);
   renderer.setClearColor(0x000000, 0);
+  
+  // Ensure canvas is properly styled
+  renderer.domElement.style.position = 'absolute';
+  renderer.domElement.style.top = '0';
+  renderer.domElement.style.left = '0';
+  renderer.domElement.style.width = '100%';
+  renderer.domElement.style.height = '100%';
+  renderer.domElement.style.display = 'block';
+  
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  const aspect = containerRect.width / containerRect.height;
+  const aspect = width / height;
   const camera = new THREE.PerspectiveCamera(65, aspect, 0.01, 100);
   camera.position.set(0, 0, 0);
   scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-  // Video plane
+  // Video plane - ensure it renders correctly
   const tex = new THREE.VideoTexture(video);
   tex.flipY = false;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  
   const planeGeo = new THREE.PlaneGeometry(1, 1);
   planeGeo.scale(1, -1, 1); // unflip selfie-type frames consistently
-  const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, depthTest: false });
+  const mat = new THREE.MeshBasicMaterial({ 
+    map: tex, 
+    side: THREE.DoubleSide, 
+    depthTest: false,
+    depthWrite: false
+  });
   const plane = new THREE.Mesh(planeGeo, mat);
 
   const fovRad = THREE.MathUtils.degToRad(camera.fov);
-  const planeH = Math.abs(2 * Math.tan(fovRad / 2) * videoPlaneDepth);
+  const planeH = Math.abs(2 * Math.tan(fovRad / 2) * Math.abs(videoPlaneDepth));
   const planeW = planeH * aspect;
   plane.scale.set(planeW, planeH, 1);
   plane.position.z = videoPlaneDepth;
   plane.renderOrder = 0;
   scene.add(plane);
+
+  // Force texture update
+  tex.needsUpdate = true;
 
   return { renderer, scene, camera, videoPlane: plane, containerEl: container };
 }

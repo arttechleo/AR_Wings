@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { DebugLogger } from './utils/debug.js';
 import { startCamera, stopCamera, switchCamera, getFacingMode } from './systems/camera.js';
 import { createScene, updateVideoPlaneTexture, disposeRenderer } from './three/scene.js';
@@ -98,30 +99,76 @@ function setupControls() {
 
 
 async function start() {
-  // 1) Camera
-  await startCamera();
-  debug.updateVideoStatus(`Camera stream active (${getFacingMode()})`);
-  await new Promise(res => (video.onloadedmetadata = () => res()));
+  try {
+    // 1) Camera
+    debug.updateStatus('Requesting camera access...');
+    await startCamera();
+    debug.updateVideoStatus(`Camera stream active (${getFacingMode()})`);
+    
+    // Wait for video metadata
+    if (video.readyState < 2) {
+      await new Promise((res, rej) => {
+        const timeout = setTimeout(() => rej(new Error('Video metadata timeout')), 5000);
+        video.onloadedmetadata = () => {
+          clearTimeout(timeout);
+          res();
+        };
+        video.onerror = () => {
+          clearTimeout(timeout);
+          rej(new Error('Video element error'));
+        };
+      });
+    }
+    
+    // Ensure video dimensions are valid
+    if (!video.videoWidth || !video.videoHeight) {
+      throw new Error('Video dimensions not available');
+    }
+    
+    debug.log('info', `Video dimensions: ${video.videoWidth}x${video.videoHeight}`);
 
-  // 2) Canvas sizes
-  canvas2D.width = video.videoWidth;
-  canvas2D.height = video.videoHeight;
+    // 2) Canvas sizes
+    canvas2D.width = video.videoWidth;
+    canvas2D.height = video.videoHeight;
 
-  // 3) 3D setup
-  three = createScene({ video, container: threeContainer, videoPlaneDepth: VIDEO_PLANE_DEPTH, debug });
-  wings = new WingsRig({ scene: three.scene, debug });
-  await wings.loadAssets();
+    // 3) 3D setup
+    debug.updateStatus('Initializing 3D scene...');
+    three = createScene({ video, container: threeContainer, videoPlaneDepth: VIDEO_PLANE_DEPTH, debug });
+    
+    // Ensure container is visible and sized
+    threeContainer.style.width = '100vw';
+    threeContainer.style.height = '100vh';
+    threeContainer.style.position = 'absolute';
+    threeContainer.style.top = '0';
+    threeContainer.style.left = '0';
+    
+    wings = new WingsRig({ scene: three.scene, debug });
+    await wings.loadAssets();
 
-  occluder = new OcclusionMask({
-    scene: three.scene,
-    camera: three.camera,
-    depthZ: GROUP_DEPTH + 0.1, // slightly in front of wings
-    debug,
-  });
+    occluder = new OcclusionMask({
+      scene: three.scene,
+      camera: three.camera,
+      depthZ: GROUP_DEPTH + 0.1, // slightly in front of wings
+      debug,
+    });
 
-  isRunning = true;
-  debug.updateStatus('Running - Stand back!');
-  requestAnimationFrame(loop);
+    isRunning = true;
+    debug.updateStatus('Running - Stand back!');
+    
+    // Keep renderer sized with viewport
+    window.addEventListener('resize', handleResize, { passive: true });
+    handleResize(); // Initial size
+    
+    // Force first render
+    updateVideoPlaneTexture(three.videoPlane);
+    three.renderer.render(three.scene, three.camera);
+    
+    requestAnimationFrame(loop);
+  } catch (error) {
+    debug.log('error', `Start failed: ${error.message}`);
+    debug.updateStatus(`Error: ${error.message}`);
+    throw error;
+  }
 }
 
 
@@ -199,9 +246,15 @@ function loop(now) {
   }
   wings.setVisible(wingsVisible);
 
-  // Render 3D
-  updateVideoPlaneTexture(three.videoPlane);
-  three.renderer.render(three.scene, three.camera);
+  // Render 3D - ensure video texture updates
+  if (three?.videoPlane?.material?.map) {
+    updateVideoPlaneTexture(three.videoPlane);
+    // Force texture update every frame for mobile
+    three.videoPlane.material.map.needsUpdate = true;
+  }
+  if (three?.renderer) {
+    three.renderer.render(three.scene, three.camera);
+  }
 }
 
 
@@ -210,6 +263,26 @@ function drawPoint(ctx, x, y, color) {
   ctx.beginPath();
   ctx.arc(x, y, 5, 0, Math.PI * 2);
   ctx.fill();
+}
+
+function handleResize() {
+  if (!three?.renderer || !three?.containerEl) return;
+  
+  // Use viewport dimensions for mobile
+  const width = window.innerWidth || three.containerEl.clientWidth || 640;
+  const height = window.innerHeight || three.containerEl.clientHeight || 480;
+  
+  three.renderer.setSize(width, height);
+  three.camera.aspect = width / height;
+  three.camera.updateProjectionMatrix();
+  
+  // Update video plane size
+  if (three.videoPlane) {
+    const fovRad = THREE.MathUtils.degToRad(three.camera.fov);
+    const planeH = Math.abs(2 * Math.tan(fovRad / 2) * Math.abs(VIDEO_PLANE_DEPTH));
+    const planeW = planeH * three.camera.aspect;
+    three.videoPlane.scale.set(planeW, planeH, 1);
+  }
 }
 
 
