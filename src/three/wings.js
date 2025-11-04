@@ -33,7 +33,9 @@ export class WingsRig {
     this.loadedCount = 0; // Count loaded splats
 
     // Depth placement (same region as video plane but closer to camera)
+    // Wings should be visible in front of video plane
     this.group.position.z = -9.9;
+    this.group.visible = true; // Ensure group is visible
   }
 
   async loadAssets(renderer) {
@@ -164,8 +166,12 @@ export class WingsRig {
     this.left.renderOrder = 1; // Same as previous working version
     this.right.renderOrder = 1; // Same as previous working version
     
+    // Ensure wings are added to group
     this.group.add(this.left);
     this.group.add(this.right);
+    
+    // Debug: log when wings are added
+    this.debug.log('info', `Wings added to group. Left: ${!!this.left}, Right: ${!!this.right}, Group in scene: ${this.scene.children.includes(this.group)}`);
     
     // Wait for both to load (with timeout)
     // The onLoad callbacks will set isSplatDataReady
@@ -222,10 +228,21 @@ export class WingsRig {
       this.debug?.log('warning', `Cannot set visibility - wings not loaded (left: ${!!this.left}, right: ${!!this.right})`);
       return;
     }
-    this.left.visible = v;
-    this.right.visible = v;
-    if (v && this.debug) {
-      this.debug.log('info', `Wings visibility set to: ${v}`);
+    
+    // Only log visibility changes to avoid spam
+    if (this.left.visible !== v || this.right.visible !== v) {
+      this.left.visible = v;
+      this.right.visible = v;
+      this.group.visible = v; // Ensure group is also visible
+      
+      if (this.debug) {
+        this.debug.log('info', `Wings visibility: ${v} | Left: ${!!this.left}, Right: ${!!this.right}, Splats ready: ${this.isSplatDataReady}`);
+        // Debug position when making visible
+        if (v) {
+          this.debug.log('info', `Wings position: Group(${this.group.position.x.toFixed(2)}, ${this.group.position.y.toFixed(2)}, ${this.group.position.z.toFixed(2)}) | Left(${this.left.position.x.toFixed(2)}, ${this.left.position.y.toFixed(2)}, ${this.left.position.z.toFixed(2)}) | Right(${this.right.position.x.toFixed(2)}, ${this.right.position.y.toFixed(2)}, ${this.right.position.z.toFixed(2)})`);
+          this.debug.log('info', `Wings scale: Left(${this.left.scale.x.toFixed(2)}, ${this.left.scale.y.toFixed(2)}, ${this.left.scale.z.toFixed(2)}) | Right(${this.right.scale.x.toFixed(2)}, ${this.right.scale.y.toFixed(2)}, ${this.right.scale.z.toFixed(2)})`);
+        }
+      }
     }
   }
    hasLastAnchor() { return !!this.lastAnchor; }

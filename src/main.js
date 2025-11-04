@@ -211,10 +211,6 @@ function loop(now) {
   if (!isRunning) return;
   requestAnimationFrame(loop);
 
-  // Frame skipping for mobile performance (only skip rendering, not detection)
-  renderCounter++;
-  const shouldRender = RENDER_SKIP === 0 || renderCounter % (RENDER_SKIP + 1) === 0;
-
   // FPS
   frameCount++;
   if (now - lastFpsUpdate >= 1000) {
@@ -223,10 +219,8 @@ function loop(now) {
     lastFpsUpdate = now;
   }
 
-  // Update 2D canvas (only when rendering)
-  if (shouldRender) {
-    ctx2D.clearRect(0, 0, canvas2D.width, canvas2D.height);
-  }
+  // Update 2D canvas
+  ctx2D.clearRect(0, 0, canvas2D.width, canvas2D.height);
 
   // Throttled detections (run asynchronously, don't block render)
   let shoulders = pose.getLastShoulders();
@@ -264,12 +258,21 @@ function loop(now) {
     }
   }
 
-  // Decide visibility: face-gate (relaxed for better UX)
-  // On mobile, skip face detection entirely for performance
-  const faceOK = isMobile ? true : face.isFacePresent(0.5); // Always true on mobile
+  // Decide visibility: show wings when shoulders detected and splats ready
   const hasShoulders = !!shoulders;
-  // Show wings if we have shoulders AND splat data is ready (matching previous working version)
-  const wingsVisible = hasShoulders && wings.isSplatDataReady();
+  const splatsReady = wings.isSplatDataReady();
+  
+  // Show wings if we have shoulders AND splat data is ready
+  // Also show if we have last anchor (for smooth transitions)
+  const wingsVisible = splatsReady && (hasShoulders || wings.hasLastAnchor());
+  
+  // Debug visibility state
+  if (hasShoulders && !splatsReady) {
+    debug.log('warning', `Shoulders detected but splats not ready. Ready: ${splatsReady}`);
+  }
+  if (splatsReady && !wingsVisible && !hasShoulders) {
+    debug.log('info', `Splats ready but no shoulders detected`);
+  }
 
   // Anchor + position
   if (hasShoulders) {
@@ -281,33 +284,21 @@ function loop(now) {
       videoHeight: video.videoHeight,
       facingMode: getFacingMode(),
     });
-    // debug dots (only when rendering)
-    if (shouldRender) {
-      drawPoint(ctx2D, left.x, left.y, '#00ff88');
-      drawPoint(ctx2D, right.x, right.y, '#00ff88');
-    }
+    // debug dots
+    drawPoint(ctx2D, left.x, left.y, '#00ff88');
+    drawPoint(ctx2D, right.x, right.y, '#00ff88');
   }
   wings.setVisible(wingsVisible);
 
-  // Render 3D - optimize texture updates (only when we actually render)
-  if (shouldRender) {
-    if (three?.videoPlane?.material?.map) {
-      // Only update texture periodically on mobile (not every frame)
-      if (isMobile) {
-        // Update every 3 frames on mobile
-        if (renderCounter % 3 === 0 && video.readyState >= video.HAVE_CURRENT_DATA) {
-          three.videoPlane.material.map.needsUpdate = true;
-        }
-      } else {
-        // Update every frame on desktop
-        if (video.readyState >= video.HAVE_CURRENT_DATA) {
-          three.videoPlane.material.map.needsUpdate = true;
-        }
-      }
-    }
-    if (three?.renderer) {
-      three.renderer.render(three.scene, three.camera);
-    }
+  // Render 3D - always update video texture for smooth playback
+  if (three?.videoPlane?.material?.map && video.readyState >= video.HAVE_CURRENT_DATA) {
+    // Update texture every frame for smooth video playback
+    three.videoPlane.material.map.needsUpdate = true;
+  }
+  
+  // Always render (remove frame skipping for smooth video)
+  if (three?.renderer) {
+    three.renderer.render(three.scene, three.camera);
   }
 }
 
