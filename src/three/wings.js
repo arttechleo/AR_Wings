@@ -89,10 +89,13 @@ export class WingsRig {
       throw new Error('Renderer required for ksplat loading');
     }
     
-    // Initialize SparkRenderer with actual Three.js renderer
+    // Initialize SparkRenderer with actual Three.js renderer (only once)
     try {
-      new SparkRenderer(renderer);
-      this.debug.log('info', 'SparkRenderer initialized');
+      if (!renderer._sparkRendererInitialized) {
+        new SparkRenderer(renderer);
+        renderer._sparkRendererInitialized = true;
+        this.debug.log('info', 'SparkRenderer initialized');
+      }
     } catch (e) {
       this.debug.log('warning', `SparkRenderer init warning: ${e?.message}`);
     }
@@ -116,35 +119,34 @@ export class WingsRig {
       throw new Error(`File verification failed: ${e.message}`);
     }
 
-    // Create SplatMesh instances with onLoad callbacks
+    // Create SplatMesh instances - SplatMesh loads asynchronously
+    // The API might use onLoad callback or might load automatically
     let leftLoaded = false;
     let rightLoaded = false;
-    let leftError = null;
-    let rightError = null;
     
     this.left = new SplatMesh({ 
       url: SPLAT_LEFT, 
       fileType: 'ksplat',
-      onLoad: () => {
+      onLoad: (mesh) => {
         leftLoaded = true;
+        if (mesh) {
+          // Apply scale if needed (some models need flipping)
+          mesh.scale.set(1, 1, 1);
+        }
         this.debug.log('success', 'Left wing ksplat loaded');
-      },
-      onError: (err) => {
-        leftError = err;
-        this.debug.log('error', `Left wing load error: ${err}`);
       }
     });
     
     this.right = new SplatMesh({ 
       url: SPLAT_RIGHT, 
       fileType: 'ksplat',
-      onLoad: () => {
+      onLoad: (mesh) => {
         rightLoaded = true;
+        if (mesh) {
+          // Apply scale if needed
+          mesh.scale.set(1, 1, 1);
+        }
         this.debug.log('success', 'Right wing ksplat loaded');
-      },
-      onError: (err) => {
-        rightError = err;
-        this.debug.log('error', `Right wing load error: ${err}`);
       }
     });
     
@@ -155,39 +157,55 @@ export class WingsRig {
     this.group.add(this.right);
     
     // Wait for both to load with timeout
+    // SplatMesh might load immediately or asynchronously
     await new Promise((resolve, reject) => {
       const checkLoaded = () => {
-        if (leftLoaded && rightLoaded) {
-          this.debug.log('success', 'Both ksplat wings loaded');
+        // Check if SplatMesh has a loaded property or if geometry exists
+        const leftReady = leftLoaded || (this.left?.geometry && this.left.geometry.attributes);
+        const rightReady = rightLoaded || (this.right?.geometry && this.right.geometry.attributes);
+        
+        if (leftReady && rightReady) {
+          this.debug.log('success', 'Both ksplat wings loaded and ready');
           resolve();
-          return true;
-        }
-        if (leftError && rightError) {
-          reject(new Error(`Both wings failed: Left: ${leftError}, Right: ${rightError}`));
           return true;
         }
         return false;
       };
       
-      // Check immediately in case they're already loaded
+      // Check immediately
       if (checkLoaded()) return;
       
-      // Poll for loaded status
+      // Poll for loaded status (check both callbacks and geometry)
+      let pollCount = 0;
+      const maxPolls = 100; // 20 seconds at 200ms intervals
       const pollInterval = setInterval(() => {
+        pollCount++;
         if (checkLoaded()) {
           clearInterval(pollInterval);
           clearTimeout(timeout);
+        } else if (pollCount >= maxPolls) {
+          clearInterval(pollInterval);
+          clearTimeout(timeout);
+          // Check final status
+          const leftReady = leftLoaded || (this.left?.geometry && this.left.geometry.attributes);
+          const rightReady = rightLoaded || (this.right?.geometry && this.right.geometry.attributes);
+          if (leftReady && rightReady) {
+            resolve();
+          } else {
+            reject(new Error(`Ksplat load timeout - Left: ${leftReady}, Right: ${rightReady}. Check console for errors.`));
+          }
         }
-      }, 200); // Poll every 200ms
+      }, 200);
       
-      // Timeout after 20 seconds (increased for large files)
+      // Timeout fallback
       const timeout = setTimeout(() => {
         clearInterval(pollInterval);
-        if (leftLoaded && rightLoaded) {
+        if (checkLoaded()) {
           resolve();
         } else {
-          const status = `Left: ${leftLoaded ? 'loaded' : leftError || 'timeout'}, Right: ${rightLoaded ? 'loaded' : rightError || 'timeout'}`;
-          reject(new Error(`Ksplat load timeout - ${status}`));
+          const leftReady = leftLoaded || (this.left?.geometry && this.left.geometry.attributes);
+          const rightReady = rightLoaded || (this.right?.geometry && this.right.geometry.attributes);
+          reject(new Error(`Ksplat load timeout - Left: ${leftReady}, Right: ${rightReady}`));
         }
       }, 20000);
     });

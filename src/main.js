@@ -29,9 +29,10 @@ let lastFpsUpdate = performance.now();
 
 // Detection throttles - optimized for mobile (30fps target)
 const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-const POSE_SKIP = isMobile ? 8 : 3; let poseCounter = 0;
-const FACE_SKIP = isMobile ? 15 : 5; let faceCounter = 0;
-const SEGM_SKIP = isMobile ? 8 : 2; let segmCounter = 0;
+const POSE_SKIP = isMobile ? 10 : 3; let poseCounter = 0;
+const FACE_SKIP = isMobile ? 20 : 5; let faceCounter = 0;
+const SEGM_SKIP = isMobile ? 15 : 2; let segmCounter = 0;
+const DISABLE_SEGM_ON_MOBILE = isMobile; // Disable segmentation entirely on mobile for FPS
 const RENDER_SKIP = 0; // Disabled - prefer other optimizations
 let renderCounter = 0;
 let lastSegmUpdate = 0;
@@ -159,12 +160,18 @@ async function start() {
     wings = new WingsRig({ scene: three.scene, debug });
     await wings.loadAssets(three.renderer);
 
-    occluder = new OcclusionMask({
-      scene: three.scene,
-      camera: three.camera,
-      depthZ: GROUP_DEPTH + 0.1, // slightly in front of wings
-      debug,
-    });
+    // Only create occluder if segmentation is enabled (not on mobile)
+    if (!DISABLE_SEGM_ON_MOBILE) {
+      occluder = new OcclusionMask({
+        scene: three.scene,
+        camera: three.camera,
+        depthZ: GROUP_DEPTH + 0.1, // slightly in front of wings
+        debug,
+      });
+    } else {
+      occluder = null; // No occlusion on mobile for performance
+      debug.log('info', 'Segmentation disabled on mobile for performance');
+    }
 
     isRunning = true;
     debug.updateStatus('Running - Stand back!');
@@ -236,21 +243,30 @@ function loop(now) {
     face.estimate(video, getFacingMode()).catch(() => {});
   }
 
-  segmCounter++;
-  if (segmCounter >= SEGM_SKIP) {
-    segmCounter = 0;
-    segm.segment(video, getFacingMode()).catch(() => {});
-  }
+  // Skip segmentation entirely on mobile for performance
+  if (!DISABLE_SEGM_ON_MOBILE) {
+    segmCounter++;
+    if (segmCounter >= SEGM_SKIP) {
+      segmCounter = 0;
+      segm.segment(video, getFacingMode()).catch(() => {});
+    }
 
-  // Update occlusion mask texture (only when segmentation runs, and less frequently)
-  if (segmCounter === 0 && (now - lastSegmUpdate > 200)) { // Only update every 200ms
-    lastSegmUpdate = now;
-    const maskCanvas = segm.getMaskCanvas();
-    if (maskCanvas) occluder.updateMask(maskCanvas, getFacingMode());
+    // Update occlusion mask texture (only when segmentation runs, and less frequently)
+    if (segmCounter === 0 && (now - lastSegmUpdate > 300)) { // Only update every 300ms
+      lastSegmUpdate = now;
+      const maskCanvas = segm.getMaskCanvas();
+      if (maskCanvas) occluder.updateMask(maskCanvas, getFacingMode());
+    }
+  } else {
+    // On mobile, hide occluder to save performance
+    if (occluder?.mesh) {
+      occluder.mesh.visible = false;
+    }
   }
 
   // Decide visibility: face-gate (relaxed for better UX)
-  const faceOK = face.isFacePresent(0.5); // Lowered from 0.7 to 0.5
+  // On mobile, skip face detection entirely for performance
+  const faceOK = isMobile ? true : face.isFacePresent(0.5); // Always true on mobile
   const hasShoulders = !!shoulders;
   // Show wings if we have shoulders OR last anchor (even without face initially)
   const wingsVisible = hasShoulders || (wings.hasLastAnchor() && faceOK);
@@ -276,9 +292,17 @@ function loop(now) {
   // Render 3D - optimize texture updates (only when we actually render)
   if (shouldRender) {
     if (three?.videoPlane?.material?.map) {
-      // Only update texture when video has new frame
-      if (video.readyState >= video.HAVE_CURRENT_DATA) {
-        three.videoPlane.material.map.needsUpdate = true;
+      // Only update texture periodically on mobile (not every frame)
+      if (isMobile) {
+        // Update every 3 frames on mobile
+        if (renderCounter % 3 === 0 && video.readyState >= video.HAVE_CURRENT_DATA) {
+          three.videoPlane.material.map.needsUpdate = true;
+        }
+      } else {
+        // Update every frame on desktop
+        if (video.readyState >= video.HAVE_CURRENT_DATA) {
+          three.videoPlane.material.map.needsUpdate = true;
+        }
       }
     }
     if (three?.renderer) {
