@@ -2,10 +2,11 @@ import * as THREE from 'three';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { SplatMesh, SparkRenderer } from '@sparkjsdev/spark';
 
-const SPLAT_LEFT = new URL('./assets/leftwing.ksplat', import.meta.url).href;
-const SPLAT_RIGHT = new URL('./assets/rightwing.ksplat', import.meta.url).href;
-const PLY_LEFT = new URL('./assets/leftwing.ply', import.meta.url).href;
-const PLY_RIGHT = new URL('./assets/rightwing.ply', import.meta.url).href;
+// Path resolution: from src/three/wings.js, go up two levels to project root, then into assets
+const SPLAT_LEFT = new URL('../../assets/leftwing.ksplat', import.meta.url).href;
+const SPLAT_RIGHT = new URL('../../assets/rightwing.ksplat', import.meta.url).href;
+const PLY_LEFT = new URL('../../assets/leftwing.ply', import.meta.url).href;
+const PLY_RIGHT = new URL('../../assets/rightwing.ply', import.meta.url).href;
 
 // Tuning
 const WING_VERTICAL_SHIFT = 0.5;
@@ -104,17 +105,26 @@ export class WingsRig {
     }
 
     // Verify files exist first
+    // Log the resolved paths for debugging
+    this.debug.log('info', `Resolved paths - Left: ${SPLAT_LEFT}, Right: ${SPLAT_RIGHT}`);
+    
     try {
       const [leftRes, rightRes] = await Promise.all([
-        fetch(SPLAT_LEFT, { method: 'HEAD' }).catch(() => null),
-        fetch(SPLAT_RIGHT, { method: 'HEAD' }).catch(() => null)
+        fetch(SPLAT_LEFT, { method: 'HEAD' }).catch((e) => {
+          this.debug.log('error', `Left wing HEAD request failed: ${e.message}`);
+          return null;
+        }),
+        fetch(SPLAT_RIGHT, { method: 'HEAD' }).catch((e) => {
+          this.debug.log('error', `Right wing HEAD request failed: ${e.message}`);
+          return null;
+        })
       ]);
       
       if (!leftRes || !leftRes.ok) {
-        throw new Error(`Left wing file not found: ${SPLAT_LEFT}`);
+        throw new Error(`Left wing file not found at: ${SPLAT_LEFT} (status: ${leftRes?.status || 'network error'})`);
       }
       if (!rightRes || !rightRes.ok) {
-        throw new Error(`Right wing file not found: ${SPLAT_RIGHT}`);
+        throw new Error(`Right wing file not found at: ${SPLAT_RIGHT} (status: ${rightRes?.status || 'network error'})`);
       }
       
       this.debug.log('info', 'Ksplat files verified, starting load...');
