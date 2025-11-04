@@ -5,15 +5,19 @@ function getVideoEl() {
 
 export async function startCamera() {
   let stream;
-  // Mobile-friendly constraints with fallbacks
+  // Optimize camera resolution for performance
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  
+  // Mobile-friendly constraints with lower resolution for better performance
   const tryConstraints = async (fm) => {
-    // Try with ideal resolution first
+    // Try with optimized resolution first (lower on mobile)
     try {
       return await navigator.mediaDevices.getUserMedia({
         video: { 
           facingMode: fm, 
-          width: { ideal: 1280, min: 640 }, 
-          height: { ideal: 720, min: 480 } 
+          width: { ideal: isMobile ? 640 : 1280, min: 320 }, 
+          height: { ideal: isMobile ? 480 : 720, min: 240 },
+          frameRate: { ideal: isMobile ? 24 : 30, max: 30 } // Limit frame rate on mobile
         },
         audio: false,
       });

@@ -236,11 +236,11 @@ export class WingsRig {
       this.group.visible = v; // Ensure group is also visible
       
       if (this.debug) {
-        this.debug.log('info', `Wings visibility: ${v} | Left: ${!!this.left}, Right: ${!!this.right}, Splats ready: ${this.isSplatDataReady}`);
+        // Only log when visibility changes (not every frame)
+        this.debug.log('info', `Wings visibility changed: ${v} | Splats ready: ${this.isSplatDataReady}`);
         // Debug position when making visible
         if (v) {
-          this.debug.log('info', `Wings position: Group(${this.group.position.x.toFixed(2)}, ${this.group.position.y.toFixed(2)}, ${this.group.position.z.toFixed(2)}) | Left(${this.left.position.x.toFixed(2)}, ${this.left.position.y.toFixed(2)}, ${this.left.position.z.toFixed(2)}) | Right(${this.right.position.x.toFixed(2)}, ${this.right.position.y.toFixed(2)}, ${this.right.position.z.toFixed(2)})`);
-          this.debug.log('info', `Wings scale: Left(${this.left.scale.x.toFixed(2)}, ${this.left.scale.y.toFixed(2)}, ${this.left.scale.z.toFixed(2)}) | Right(${this.right.scale.x.toFixed(2)}, ${this.right.scale.y.toFixed(2)}, ${this.right.scale.z.toFixed(2)})`);
+          this.debug.log('info', `Wings visible - Group pos: (${this.group.position.x.toFixed(2)}, ${this.group.position.y.toFixed(2)}, ${this.group.position.z.toFixed(2)}) | Scale: ${this.currentScale.toFixed(2)}`);
         }
       }
     }

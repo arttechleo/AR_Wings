@@ -34,11 +34,13 @@ export function createScene({ video, container, videoPlaneDepth = -10, debug }) 
   camera.position.set(0, 0, 0);
   scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-  // Video plane - ensure it renders correctly
+  // Video plane - optimize for performance
   const tex = new THREE.VideoTexture(video);
   tex.flipY = false;
   tex.minFilter = THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
+  // Don't auto-update every frame - we'll control it manually for performance
+  tex.generateMipmaps = false; // Disable mipmaps for video (not needed)
   
   const planeGeo = new THREE.PlaneGeometry(1, 1);
   planeGeo.scale(1, -1, 1); // unflip selfie-type frames consistently

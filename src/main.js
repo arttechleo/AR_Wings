@@ -36,6 +36,8 @@ const DISABLE_SEGM_ON_MOBILE = isMobile; // Disable segmentation entirely on mob
 const RENDER_SKIP = 0; // Disabled - prefer other optimizations
 let renderCounter = 0;
 let lastSegmUpdate = 0;
+let lastVideoUpdate = 0;
+let videoFrameCallback = null;
 
 
 // Subsystems
@@ -180,6 +182,19 @@ async function start() {
     window.addEventListener('resize', handleResize, { passive: true });
     handleResize(); // Initial size
     
+    // Use requestVideoFrameCallback for efficient video updates (if available)
+    if (video.requestVideoFrameCallback) {
+      const updateVideoFrame = () => {
+        if (!isRunning || !three?.videoPlane?.material?.map) return;
+        three.videoPlane.material.map.needsUpdate = true;
+        videoFrameCallback = video.requestVideoFrameCallback(updateVideoFrame);
+      };
+      videoFrameCallback = video.requestVideoFrameCallback(updateVideoFrame);
+      debug.log('info', 'Using requestVideoFrameCallback for efficient video updates');
+    } else {
+      debug.log('info', 'requestVideoFrameCallback not available, using frame-based updates');
+    }
+    
     // Force first render
     updateVideoPlaneTexture(three.videoPlane);
     three.renderer.render(three.scene, three.camera);
@@ -197,12 +212,19 @@ async function restart() {
   isRunning = false;
   stopCamera();
 
+  // Clean up video frame callback if it exists
+  if (videoFrameCallback && video.cancelVideoFrameCallback) {
+    video.cancelVideoFrameCallback(videoFrameCallback);
+    videoFrameCallback = null;
+  }
+
   // Dispose ThreeJS renderer cleanly
   disposeRenderer(three?.renderer, three?.containerEl);
   three = null;
 
   // Reset counters
   poseCounter = faceCounter = segmCounter = 0;
+  lastVideoUpdate = 0;
 
   await start();
 }
@@ -218,9 +240,6 @@ function loop(now) {
     frameCount = 0;
     lastFpsUpdate = now;
   }
-
-  // Update 2D canvas
-  ctx2D.clearRect(0, 0, canvas2D.width, canvas2D.height);
 
   // Throttled detections (run asynchronously, don't block render)
   let shoulders = pose.getLastShoulders();
@@ -266,12 +285,9 @@ function loop(now) {
   // Also show if we have last anchor (for smooth transitions)
   const wingsVisible = splatsReady && (hasShoulders || wings.hasLastAnchor());
   
-  // Debug visibility state
-  if (hasShoulders && !splatsReady) {
+  // Debug visibility state (throttled to avoid spam)
+  if (hasShoulders && !splatsReady && frameCount % 60 === 0) {
     debug.log('warning', `Shoulders detected but splats not ready. Ready: ${splatsReady}`);
-  }
-  if (splatsReady && !wingsVisible && !hasShoulders) {
-    debug.log('info', `Splats ready but no shoulders detected`);
   }
 
   // Anchor + position
@@ -290,13 +306,19 @@ function loop(now) {
   }
   wings.setVisible(wingsVisible);
 
-  // Render 3D - always update video texture for smooth playback
-  if (three?.videoPlane?.material?.map && video.readyState >= video.HAVE_CURRENT_DATA) {
-    // Update texture every frame for smooth video playback
-    three.videoPlane.material.map.needsUpdate = true;
+  // Render 3D - optimize video texture updates
+  // Only update texture if requestVideoFrameCallback is not available (it handles updates)
+  // Otherwise, the callback handles updates automatically
+  if (!video.requestVideoFrameCallback && three?.videoPlane?.material?.map && video.readyState >= video.HAVE_CURRENT_DATA) {
+    // Only update when video actually has new frame (check timestamp)
+    const currentTime = video.currentTime;
+    if (Math.abs(currentTime - lastVideoUpdate) > 0.01) { // Only if time changed significantly
+      lastVideoUpdate = currentTime;
+      three.videoPlane.material.map.needsUpdate = true;
+    }
   }
   
-  // Always render (remove frame skipping for smooth video)
+  // Always render (but optimize what we do)
   if (three?.renderer) {
     three.renderer.render(three.scene, three.camera);
   }
