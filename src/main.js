@@ -268,8 +268,8 @@ function loop(now) {
   // On mobile, skip face detection entirely for performance
   const faceOK = isMobile ? true : face.isFacePresent(0.5); // Always true on mobile
   const hasShoulders = !!shoulders;
-  // Show wings if we have shoulders OR last anchor (even without face initially)
-  const wingsVisible = hasShoulders || (wings.hasLastAnchor() && faceOK);
+  // Show wings if we have shoulders AND splat data is ready (matching previous working version)
+  const wingsVisible = hasShoulders && wings.isSplatDataReady();
 
   // Anchor + position
   if (hasShoulders) {

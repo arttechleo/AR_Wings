@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
-import { KsplatLoader } from './ksplat-loader.js';
+import { SplatMesh, SparkRenderer } from '@sparkjsdev/spark';
 
 const SPLAT_LEFT = new URL('./assets/leftwing.ksplat', import.meta.url).href;
 const SPLAT_RIGHT = new URL('./assets/rightwing.ksplat', import.meta.url).href;
@@ -28,6 +28,8 @@ export class WingsRig {
     this.lastAnchor = null; // cache of last shoulders
     this.currentScale = BASE_SCALE;
     this.currentOffset = 0;
+    this.isSplatDataReady = false; // Flag to track when splats are loaded
+    this.loadedCount = 0; // Count loaded splats
 
     // Depth placement (same region as video plane but closer to camera)
     this.group.position.z = -9.9;
@@ -85,31 +87,112 @@ export class WingsRig {
     this.group.add(this.right);
   }
   async _loadSplat(renderer) {
-    // Use direct ksplat loader instead of @sparkjsdev/spark
-    const loader = new KsplatLoader();
+    if (!renderer) {
+      throw new Error('Renderer required for ksplat loading');
+    }
     
-    this.debug.log('info', 'Loading ksplat files with direct loader...');
-    
+    // Initialize SparkRenderer with actual Three.js renderer (only once)
+    // This is critical - must be done before creating SplatMesh
     try {
-      // Load both wings in parallel
-      const [leftMesh, rightMesh] = await Promise.all([
-        loader.load(SPLAT_LEFT),
-        loader.load(SPLAT_RIGHT)
+      if (!renderer._sparkRendererInitialized) {
+        new SparkRenderer(renderer);
+        renderer._sparkRendererInitialized = true;
+        this.debug.log('info', 'SparkRenderer initialized');
+      }
+    } catch (e) {
+      this.debug.log('warning', `SparkRenderer init warning: ${e?.message}`);
+    }
+
+    // Verify files exist first
+    try {
+      const [leftRes, rightRes] = await Promise.all([
+        fetch(SPLAT_LEFT, { method: 'HEAD' }).catch(() => null),
+        fetch(SPLAT_RIGHT, { method: 'HEAD' }).catch(() => null)
       ]);
       
-      this.left = leftMesh;
-      this.right = rightMesh;
+      if (!leftRes || !leftRes.ok) {
+        throw new Error(`Left wing file not found: ${SPLAT_LEFT}`);
+      }
+      if (!rightRes || !rightRes.ok) {
+        throw new Error(`Right wing file not found: ${SPLAT_RIGHT}`);
+      }
       
-      this.left.visible = this.right.visible = false;
-      this.left.renderOrder = this.right.renderOrder = 2;
+      this.debug.log('info', 'Ksplat files verified, starting load...');
+    } catch (e) {
+      throw new Error(`File verification failed: ${e.message}`);
+    }
+
+    // Create SplatMesh instances using the same pattern that worked before
+    // The onLoad callback pattern is critical for @sparkjsdev/spark
+    this.debug.log('info', 'Creating SplatMesh instances...');
+    
+    this.left = new SplatMesh({ 
+      url: SPLAT_LEFT, 
+      fileType: 'ksplat',
+      onLoad: (mesh) => {
+        if (mesh) {
+          mesh.scale.set(1, 1, -1); // Same scale as previous working version
+        }
+        this._checkSplatDataReady();
+        this.debug.log('success', 'Left wing ksplat loaded');
+      }
+    });
+    
+    this.right = new SplatMesh({ 
+      url: SPLAT_RIGHT, 
+      fileType: 'ksplat',
+      onLoad: (mesh) => {
+        if (mesh) {
+          mesh.scale.set(1, 1, -1); // Same scale as previous working version
+        }
+        this._checkSplatDataReady();
+        this.debug.log('success', 'Right wing ksplat loaded');
+      }
+    });
+    
+    this.left.visible = this.right.visible = false;
+    this.left.renderOrder = 1; // Same as previous working version
+    this.right.renderOrder = 1; // Same as previous working version
+    
+    this.group.add(this.left);
+    this.group.add(this.right);
+    
+    // Wait for both to load (with timeout)
+    // The onLoad callbacks will set isSplatDataReady
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (this.isSplatDataReady) {
+          resolve();
+        } else {
+          reject(new Error(`Ksplat load timeout - Left: ${!!this.left}, Right: ${!!this.right}, Ready: ${this.isSplatDataReady}`));
+        }
+      }, 20000);
       
-      this.group.add(this.left);
-      this.group.add(this.right);
+      // Check if already loaded
+      if (this.isSplatDataReady) {
+        clearTimeout(timeout);
+        resolve();
+        return;
+      }
       
-      this.debug.log('success', 'Both ksplat wings loaded successfully');
-    } catch (error) {
-      this.debug.log('error', `Ksplat loading failed: ${error.message}`);
-      throw error;
+      // Poll for ready status
+      const pollInterval = setInterval(() => {
+        if (this.isSplatDataReady) {
+          clearInterval(pollInterval);
+          clearTimeout(timeout);
+          resolve();
+        }
+      }, 200);
+    });
+  }
+
+  _checkSplatDataReady() {
+    this.loadedCount++;
+    if (this.loadedCount === 2) {
+      this.isSplatDataReady = true;
+      this.debug.log('success', 'Gaussian Splat data loaded and ready!');
+      this.debug.updateAssetStatus('Gaussian Splats active');
+      this.loadedCount = 0; // Reset for potential reload
     }
   }
 
@@ -136,6 +219,7 @@ export class WingsRig {
     }
   }
    hasLastAnchor() { return !!this.lastAnchor; }
+   isSplatDataReady() { return this.isSplatDataReady; }
 
   updateFromShoulders({ left, right, videoWidth, videoHeight, facingMode }) {
     this.lastAnchor = { left, right };
@@ -185,8 +269,12 @@ export class WingsRig {
     const x = (side === 'left' ? this.currentOffset : -this.currentOffset) * FIXED_SCALE;
     wing.position.set(x, 0, 0);
 
-    const scaleZFactor = 1.5; // a bit thicker for PLY normals look
-    wing.scale.set(this.currentScale, this.currentScale, this.currentScale * scaleZFactor);
+    // Apply scale - check if it's a SplatMesh (same as previous working version)
+    const scaleZFactor = 1.5;
+    let finalScaleFactor = (wing instanceof SplatMesh || wing.constructor.name === 'SplatMesh') 
+      ? this.currentScale 
+      : 1.2;
+    wing.scale.set(finalScaleFactor, finalScaleFactor, finalScaleFactor * scaleZFactor);
 
     const baseRotX = -Math.PI * 0.2;
     const baseRotY = Math.PI; // face camera
