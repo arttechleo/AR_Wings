@@ -7,6 +7,14 @@ import { initPersonSegmentation, runPersonSegmentationFrame, isPersonSegmentatio
 import { estimateOrientationFromPose, smoothOrientation } from './segmentation/orientation.js';
 import { WingsController } from './wingsController.js';
 import { OcclusionCompositor } from './render/occlusionCompositor.js';
+import {
+    isDepthSupported,
+    initDepthSensing,
+    getCurrentDepthTexture,
+    getDepthParams,
+    isDepthAvailable,
+    disposeDepthSensing,
+} from './depth/depthOcclusion.js';
 
 /**
  * === CURRENT AR PIPELINE SUMMARY ===
@@ -80,6 +88,10 @@ const MAX_ORIENTATION_HISTORY = 5;
 
 // --- OCCLUSION COMPOSITOR ---
 let occlusionCompositor = null;
+
+// --- DEPTH/LIDAR OCCLUSION ---
+let depthEnabled = false;
+let depthOcclusionMesh = null;
 
 // --- WINGS CONTROLLER ---
 let wingsController = null; 
@@ -489,8 +501,170 @@ function setupThreeJS(videoWidth, videoHeight) {
     } else {
         if (wingsGroup && !scene.children.includes(wingsGroup)) scene.add(wingsGroup);
     }
+
+    // Initialize depth sensing after renderer is ready
+    tryInitDepth();
 }
 // === END SETUP THREE.JS ===
+
+// === DEPTH SENSING INITIALIZATION ===
+async function tryInitDepth() {
+    if (await isDepthSupported()) {
+        const gl = threeRendererInstance.getContext();
+        if (gl) {
+            const success = await initDepthSensing(gl);
+            if (success) {
+                depthEnabled = true;
+                debugLogger.log('success', '[Depth] Depth sensing initialized (LiDAR / WebXR Depth).');
+                // Create depth occlusion plane if depth is enabled
+                createDepthOcclusionPlane();
+            } else {
+                debugLogger.log('warning', '[Depth] Depth sensing initialization failed.');
+            }
+        }
+    } else {
+        debugLogger.log('info', '[Depth] No depth support detected; falling back to BodyPix segmentation only.');
+    }
+}
+
+// === DEPTH OCCLUSION PLANE CREATION ===
+function createDepthOcclusionPlane() {
+    if (!videoBackgroundPlane || !videoTexture) {
+        console.warn('[Depth] Cannot create depth occlusion plane: video plane not ready');
+        return;
+    }
+
+    // Use same geometry as the video plane
+    const geometry = videoBackgroundPlane.geometry.clone();
+
+    const uniforms = {
+        uDepthTexture: { value: null },
+        uVideoTexture: { value: videoTexture },
+        uNear: { value: 0.0 },   // to be filled from depth params
+        uFar: { value: 5.0 },    // example max distance in meters
+        uWingsDepth: { value: -5.0 },  // approximate z of wings in camera space
+        uDepthScale: { value: 1.0 },   // scale/normalize as needed
+        uUseBodyMask: { value: false },  // optional: blending with BodyPix
+        uDepthEnabled: { value: 0.0 },  // 1.0 if depth texture is valid, 0.0 otherwise
+    };
+
+    const material = new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader: `
+            varying vec2 vUv;
+            void main() {
+                vUv = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `,
+        fragmentShader: `
+            varying vec2 vUv;
+            uniform sampler2D uDepthTexture;
+            uniform sampler2D uVideoTexture;
+            uniform float uNear;
+            uniform float uFar;
+            uniform float uWingsDepth;
+            uniform float uDepthScale;
+            uniform bool uUseBodyMask;
+            uniform float uDepthEnabled;
+
+            // Helper: convert raw depth to linear distance (depends on API)
+            float depthToMeters(float rawDepth) {
+                // Adjust this function to your depth API:
+                // e.g., if rawDepth is already [0,1] mapped to [near, far]
+                float depth = rawDepth * uDepthScale;
+                return mix(uNear, uFar, depth);
+            }
+
+            void main() {
+                // If depth is not enabled or texture is not available, don't occlude
+                if (uDepthEnabled < 0.5) discard;
+
+                float rawDepth = texture2D(uDepthTexture, vUv).r;
+                // Check for invalid depth values (0 or near-zero typically means no depth)
+                if (rawDepth < 0.001) discard;
+                
+                float sceneDepth = depthToMeters(rawDepth);
+
+                // Heuristic: if real-world depth is closer than the wings depth,
+                // treat that pixel as "real world in front", so we occlude wings.
+                // uWingsDepth should be in meters relative to camera; adjust as needed.
+                // Note: uWingsDepth is negative (behind camera), so we compare absolute values
+                bool isRealWorldInFront = (sceneDepth > 0.0 && sceneDepth < abs(uWingsDepth));
+
+                if (!isRealWorldInFront) {
+                    // Real-world is farther than wings or invalid → no occlusion
+                    discard;
+                }
+
+                // Real-world in front: draw the video pixel to cover wings
+                vec4 videoColor = texture2D(uVideoTexture, vUv);
+                gl_FragColor = videoColor;
+            }
+        `,
+        transparent: true,
+        depthTest: true,
+        depthWrite: false,
+    });
+
+    depthOcclusionMesh = new THREE.Mesh(geometry, material);
+    depthOcclusionMesh.position.copy(videoBackgroundPlane.position);
+
+    // Ensure it sits just in front of the wings in render order and depth
+    videoBackgroundPlane.renderOrder = 0;
+    if (wingsGroup) {
+        wingsGroup.renderOrder = 1;
+    }
+    depthOcclusionMesh.renderOrder = 2;
+
+    // Position it slightly closer to the camera than wings in Z, if using depthTest
+    // Get wings depth from wingsController or use default
+    const wingsZ = wingsGroup ? wingsGroup.position.z : TEST_DEPTH_Z;
+    depthOcclusionMesh.position.z = wingsZ + 0.01;
+
+    // Initially hidden - will be shown when depth is available
+    depthOcclusionMesh.visible = false;
+
+    if (scene) {
+        scene.add(depthOcclusionMesh);
+        debugLogger.log('info', '[Depth] Depth occlusion plane created');
+    }
+}
+
+// === UPDATE DEPTH OCCLUSION ===
+function updateDepthOcclusion() {
+    if (!depthEnabled || !depthOcclusionMesh) return;
+
+    const depthTexture = getCurrentDepthTexture();
+    if (!depthTexture) {
+        // Hide occlusion plane if no depth data and disable in shader
+        depthOcclusionMesh.visible = false;
+        depthOcclusionMesh.material.uniforms.uDepthEnabled.value = 0.0;
+        return;
+    }
+
+    const params = getDepthParams() || {};
+    const mat = depthOcclusionMesh.material;
+
+    mat.uniforms.uDepthTexture.value = depthTexture;
+    mat.uniforms.uDepthEnabled.value = 1.0; // Enable depth in shader
+    if (typeof params.near === 'number') mat.uniforms.uNear.value = params.near;
+    if (typeof params.far === 'number') mat.uniforms.uFar.value = params.far;
+    if (typeof params.depthScale === 'number') mat.uniforms.uDepthScale.value = params.depthScale;
+
+    // Update uWingsDepth based on current wings position
+    if (wingsGroup) {
+        const wingsZ = wingsGroup.position.z;
+        mat.uniforms.uWingsDepth.value = wingsZ;
+        
+        // Update occlusion plane position to match wings
+        depthOcclusionMesh.position.z = wingsZ + 0.01;
+    }
+
+    // Show occlusion plane when depth is available
+    depthOcclusionMesh.visible = true;
+}
+// === END DEPTH OCCLUSION ===
 
 // --- ASSET LOADING AND FALLBACK (UNCHANGED) ---
 
@@ -652,10 +826,15 @@ async function renderLoop() {
 
     // --- 2. THROTTLED SEGMENTATION (MediaPipe - runs every frame or every 2 frames) ---
     // currentSegmentationResult is already declared above
+    // Reduce segmentation frequency when depth is enabled (depth handles occlusion)
+    const effectiveSegmentationSkipFrames = depthEnabled && isDepthAvailable() 
+        ? Math.max(segmentationSkipFrames * 2, 6) // Double skip frames when depth works
+        : segmentationSkipFrames;
+    
     if (video.readyState >= video.HAVE_ENOUGH_DATA && segmentationReady && isPersonSegmentationReady()) {
         segmentationFrameCounter++;
         
-        if (segmentationFrameCounter >= segmentationSkipFrames) {
+        if (segmentationFrameCounter >= effectiveSegmentationSkipFrames) {
             segmentationFrameCounter = 0;
             lastSegmentationInferenceStart = performance.now();
             
@@ -784,14 +963,40 @@ async function renderLoop() {
             }
         }
 
-        // Render with occlusion compositor if enabled and segmentation available
-        // Otherwise render normally to ensure wings are visible
-        if (!DEBUG_DISABLE_OCCLUSION && occlusionCompositor && currentSegmentationResult && 
-            currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
-            occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, 
-                videoTexture, wingsGroup, videoBackgroundPlane);
+        // --- Update depth occlusion before rendering ---
+        updateDepthOcclusion();
+
+        // --- Determine occlusion method: prefer depth, fall back to segmentation ---
+        const useDepthOcclusion = depthEnabled && depthOcclusionMesh && depthOcclusionMesh.visible && 
+                                  isDepthAvailable();
+        
+        // Render with appropriate occlusion method
+        if (!DEBUG_DISABLE_OCCLUSION) {
+            if (useDepthOcclusion) {
+                // Use depth-based occlusion (depth occlusion mesh handles it in the scene)
+                // Hide segmentation-based occlusion plane if present
+                threeRendererInstance.render(scene, camera);
+            } else if (occlusionCompositor && currentSegmentationResult && 
+                      currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
+                // Fall back to segmentation-based occlusion
+                // Hide depth occlusion plane when using segmentation
+                if (depthOcclusionMesh) {
+                    depthOcclusionMesh.visible = false;
+                }
+                occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, 
+                    videoTexture, wingsGroup, videoBackgroundPlane);
+            } else {
+                // No occlusion - render normally
+                if (depthOcclusionMesh) {
+                    depthOcclusionMesh.visible = false;
+                }
+                threeRendererInstance.render(scene, camera);
+            }
         } else {
-            // Render normally - wings should be visible
+            // Occlusion disabled for debugging
+            if (depthOcclusionMesh) {
+                depthOcclusionMesh.visible = false;
+            }
             threeRendererInstance.render(scene, camera);
         }
     }
