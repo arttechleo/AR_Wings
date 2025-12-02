@@ -211,10 +211,12 @@ function loop(now) {
   if (!isRunning) return;
   requestAnimationFrame(loop);
 
-  // FPS
+  // FPS calculation - accurate for 60fps target
   frameCount++;
-  if (now - lastFpsUpdate >= 1000) {
-    debug.updateFPS(frameCount / ((now - lastFpsUpdate) / 1000));
+  const timeDelta = now - lastFpsUpdate;
+  if (timeDelta >= 1000) {
+    const fps = (frameCount / timeDelta) * 1000;
+    debug.updateFPS(fps);
     frameCount = 0;
     lastFpsUpdate = now;
   }
