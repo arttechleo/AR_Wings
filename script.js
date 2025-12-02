@@ -74,7 +74,7 @@ let videoTexture = null; // Store video texture for occlusion compositor
 let segmentationReady = false;
 let segmentationMaskTexture = null;
 let segmentationFrameCounter = 0;
-let segmentationSkipFrames = 1; // Start with every frame, can increase if FPS drops
+let segmentationSkipFrames = 3; // Run segmentation every 3 frames for better performance
 let orientationHistory = []; // Store recent orientations for smoothing
 const MAX_ORIENTATION_HISTORY = 5;
 
@@ -90,15 +90,18 @@ let isSplatDataReady = false;
 let lastGoodPoseKeypoints = null; // 👈 CRITICAL: Stores the last known reliable pose data
 
 // *** PERFORMANCE OPTIMIZATION VARIABLES ***
-const POSE_DETECTION_SKIP_FRAMES = 6; // Run AI only once every 6 frames (increased for performance)
+let POSE_DETECTION_SKIP_FRAMES = 6; // Run AI only once every 6 frames (increased for performance)
+const MAX_POSE_SKIP_FRAMES = 10; // Maximum skip frames for adaptive tuning
 let poseDetectionFrameCounter = 0;
 
 // Performance monitoring
 let segmentationInferenceTime = 0;
 let lastSegmentationInferenceStart = 0;
 
-// Debug toggle
+// Debug toggles
 let DEBUG_MODE = false; // Toggle with 'D' key or ?debug=1 URL param
+const DEBUG_DISABLE_OCCLUSION = false; // Set to true to disable occlusion plane for debugging
+const DEBUG_FORCE_WINGS_VISIBLE = false; // Set to true to always show wings (ignore pose/segmentation)
 
 // Adaptive performance
 let lowFpsCounter = 0;
@@ -306,11 +309,19 @@ function init() {
     const urlParams = new URLSearchParams(window.location.search);
     DEBUG_MODE = urlParams.get('debug') === '1';
 
-    // Keyboard shortcut for debug toggle
+    // Keyboard shortcuts for debug toggles
     window.addEventListener('keydown', (e) => {
         if (e.key === 'd' || e.key === 'D') {
             DEBUG_MODE = !DEBUG_MODE;
             debugLogger.log('info', `Debug mode: ${DEBUG_MODE ? 'ON' : 'OFF'}`);
+        } else if (e.key === 'o' || e.key === 'O') {
+            // Toggle occlusion (if DEBUG_DISABLE_OCCLUSION is mutable)
+            const currentOcclusionState = !DEBUG_DISABLE_OCCLUSION;
+            debugLogger.log('info', `Occlusion: ${currentOcclusionState ? 'ENABLED' : 'DISABLED'} (toggle via DEBUG_DISABLE_OCCLUSION flag)`);
+        } else if (e.key === 'w' || e.key === 'W') {
+            // Toggle force wings visible (if DEBUG_FORCE_WINGS_VISIBLE is mutable)
+            const currentForceState = DEBUG_FORCE_WINGS_VISIBLE;
+            debugLogger.log('info', `Force wings visible: ${currentForceState ? 'ENABLED' : 'DISABLED'} (toggle via DEBUG_FORCE_WINGS_VISIBLE flag)`);
         }
     });
 
@@ -396,7 +407,9 @@ function setupThreeJS(videoWidth, videoHeight) {
     const containerRect = threeContainer.getBoundingClientRect();
 
     const threeRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-    threeRenderer.setPixelRatio(window.devicePixelRatio);
+    // Cap pixel ratio for performance (1.5 max on low-end devices)
+    const maxPixelRatio = 1.5;
+    threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
     threeRenderer.setSize(containerRect.width, containerRect.height);
     threeRenderer.setClearColor(0x000000, 0); 
     threeContainer.appendChild(threeRenderer.domElement);
@@ -696,7 +709,15 @@ async function renderLoop() {
     }
 
     // --- 4. WING POSITIONING USING WINGSCONTROLLER ---
-    if (currentPoseKeypoints && isSplatDataReady && wingsController) {
+    // Force wings visible for debugging if flag is set
+    if (DEBUG_FORCE_WINGS_VISIBLE && isSplatDataReady && wingsGroup) {
+        wingsGroup.visible = true;
+        if (wingsAssetLeft) wingsAssetLeft.visible = true;
+        if (wingsAssetRight) wingsAssetRight.visible = true;
+        if (scene && !scene.children.includes(wingsGroup)) {
+            scene.add(wingsGroup);
+        }
+    } else if (currentPoseKeypoints && isSplatDataReady && wingsController) {
         // Update wings controller with pose and orientation
         wingsController.update({
             keypoints: currentPoseKeypoints,
@@ -725,8 +746,8 @@ async function renderLoop() {
                 wingsAssetRight.rotation
             );
         }
-    } else if (wingsController) {
-        // Hide wings if no pose detected
+    } else if (wingsController && !DEBUG_FORCE_WINGS_VISIBLE) {
+        // Hide wings if no pose detected (unless debug force is enabled)
         wingsController.setWingsVisible(false);
     }
 
@@ -736,8 +757,11 @@ async function renderLoop() {
             videoBackgroundPlane.material.map.needsUpdate = true;
         }
 
-        // Ensure wings group is visible if we have pose detection
-        if (wingsGroup && currentPoseKeypoints && currentPoseKeypoints.length > 0) {
+        // Ensure wings group is visible based on debug flags or pose detection
+        const shouldShowWings = DEBUG_FORCE_WINGS_VISIBLE || 
+                                (wingsGroup && currentPoseKeypoints && currentPoseKeypoints.length > 0);
+        
+        if (shouldShowWings && wingsGroup) {
             wingsGroup.visible = true;
             // Also ensure individual wings are visible
             if (wingsAssetLeft) {
@@ -760,33 +784,46 @@ async function renderLoop() {
             }
         }
 
-        // TEMPORARILY: Render normally to ensure wings are visible
-        // TODO: Re-enable occlusion compositor once wings visibility is confirmed
-        threeRendererInstance.render(scene, camera);
-        
-        // Use occlusion compositor if segmentation is available (DISABLED FOR DEBUG)
-        // if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
-        //     occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, videoTexture, wingsGroup, videoBackgroundPlane);
-        // } else {
-        //     // Render normally - wings should be visible
-        //     threeRendererInstance.render(scene, camera);
-        // }
+        // Render with occlusion compositor if enabled and segmentation available
+        // Otherwise render normally to ensure wings are visible
+        if (!DEBUG_DISABLE_OCCLUSION && occlusionCompositor && currentSegmentationResult && 
+            currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
+            occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, 
+                videoTexture, wingsGroup, videoBackgroundPlane);
+        } else {
+            // Render normally - wings should be visible
+            threeRendererInstance.render(scene, camera);
+        }
     }
 
     // --- 6. ADAPTIVE PERFORMANCE TUNING ---
     const fps = frameCount / ((Date.now() - lastFpsUpdate) / 1000);
-    if (fps < LOW_FPS_THRESHOLD) {
+    if (fps < LOW_FPS_THRESHOLD && fps > 0) {
         lowFpsCounter += 16; // Approximate frame time (60fps = 16ms)
         if (lowFpsCounter > LOW_FPS_DURATION) {
             // Increase skip frames to reduce load
-            if (POSE_DETECTION_SKIP_FRAMES < 10) {
-                // Already handled by constant, but could be made adaptive
+            if (POSE_DETECTION_SKIP_FRAMES < MAX_POSE_SKIP_FRAMES) {
+                POSE_DETECTION_SKIP_FRAMES += 1;
+                if (DEBUG_MODE) debugLogger.log('warning', `Performance: Increased pose skip to ${POSE_DETECTION_SKIP_FRAMES}`);
             }
-            if (segmentationSkipFrames < 3) {
-                segmentationSkipFrames = 3; // Reduce segmentation frequency
-                if (DEBUG_MODE) debugLogger.log('warning', 'Performance: Reduced segmentation frequency');
+            if (segmentationSkipFrames < 5) {
+                segmentationSkipFrames += 1; // Reduce segmentation frequency
+                if (DEBUG_MODE) debugLogger.log('warning', `Performance: Increased segmentation skip to ${segmentationSkipFrames}`);
             }
             lowFpsCounter = 0;
+        }
+    } else if (fps > 40 && (POSE_DETECTION_SKIP_FRAMES > 4 || segmentationSkipFrames > 2)) {
+        // If FPS is good, gradually reduce skip frames for better quality
+        lowFpsCounter = Math.max(0, lowFpsCounter - 8);
+        if (lowFpsCounter === 0 && (POSE_DETECTION_SKIP_FRAMES > 4 || segmentationSkipFrames > 2)) {
+            if (POSE_DETECTION_SKIP_FRAMES > 4) {
+                POSE_DETECTION_SKIP_FRAMES -= 1;
+                if (DEBUG_MODE) debugLogger.log('info', `Performance: Reduced pose skip to ${POSE_DETECTION_SKIP_FRAMES}`);
+            }
+            if (segmentationSkipFrames > 2) {
+                segmentationSkipFrames -= 1;
+                if (DEBUG_MODE) debugLogger.log('info', `Performance: Reduced segmentation skip to ${segmentationSkipFrames}`);
+            }
         }
     } else {
         lowFpsCounter = Math.max(0, lowFpsCounter - 16); // Gradually reset
