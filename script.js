@@ -2,7 +2,58 @@
 import * as THREE from 'three';
 import * as tf from '@tensorflow/tfjs';
 import * as poseDetection from '@tensorflow-models/pose-detection'; 
-import { SplatMesh, SparkRenderer } from "@sparkjsdev/spark"; 
+import { SplatMesh, SparkRenderer } from "@sparkjsdev/spark";
+import { initHumanSegmentation, runSegmentationFrame, isSegmentationReady } from './segmentation/humanSegmentation.js';
+import { estimateOrientationFromPose, smoothOrientation } from './segmentation/orientation.js';
+import { WingsController } from './wingsController.js';
+
+/**
+ * === CURRENT AR PIPELINE SUMMARY ===
+ * 
+ * The AR pipeline follows this flow:
+ * 
+ * 1. CAMERA INITIALIZATION
+ *    - Request camera stream via getUserMedia
+ *    - Create video element and play stream
+ *    - Wait for metadata to get video dimensions
+ * 
+ * 2. 3D SCENE SETUP (Three.js)
+ *    - Create WebGL renderer with alpha channel
+ *    - Set up perspective camera
+ *    - Create video background plane at VIDEO_PLANE_DEPTH (-10.0)
+ *    - Initialize SparkRenderer for Gaussian Splatting support
+ * 
+ * 3. GAUSSIAN SPLATTING WINGS LOADING
+ *    - Load left and right wing .ksplat files as SplatMesh objects
+ *    - Add wings to a THREE.Group for coordinated positioning
+ *    - Fallback to box geometry if splat files fail to load
+ * 
+ * 4. POSE DETECTION (MoveNet - TensorFlow.js)
+ *    - Load MoveNet Lightning model for lightweight pose estimation
+ *    - Run pose detection every POSE_DETECTION_SKIP_FRAMES (3) frames for performance
+ *    - Extract shoulder keypoints (left_shoulder, right_shoulder)
+ *    - Store last good pose keypoints for smoothing
+ * 
+ * 5. WING POSITIONING & RENDERING
+ *    - Calculate average shoulder position → map to 3D coordinates
+ *    - Position wings group based on normalized shoulder coordinates
+ *    - Calculate dynamic horizontal offset from shoulder width
+ *    - Apply rotation based on shoulder height difference (tilt detection)
+ *    - Render wings at TEST_DEPTH_Z (-5.0) with BACK_OFFSET_Z offset
+ * 
+ * 6. RENDER LOOP
+ *    - Update video texture
+ *    - Run pose detection (throttled)
+ *    - Position wings based on pose keypoints
+ *    - Render Three.js scene (video background + wings)
+ *    - Draw debug points on 2D canvas overlay
+ * 
+ * Current limitations:
+ * - No human segmentation mask (only pose keypoints)
+ * - Wings always appear at fixed depth relative to shoulders
+ * - No occlusion handling (wings may appear in front of person)
+ * - No orientation detection (front vs back)
+ */ 
 
 // Global variables for the scene and pose detection
 let scene, camera;
@@ -15,7 +66,20 @@ let debugLogger;
 let isRunning = false;
 let frameCount = 0;
 let lastFpsUpdate = Date.now();
-let videoBackgroundPlane; 
+let videoBackgroundPlane;
+
+// --- SEGMENTATION VARIABLES ---
+let segmentationReady = false;
+let segmentationMaskTexture = null;
+let segmentationMaskPlane = null;
+let lastSegmentationTime = 0;
+let segmentationFrameCounter = 0;
+const SEGMENTATION_SKIP_FRAMES = 2; // Run segmentation every 2-3 frames for performance
+let orientationHistory = []; // Store recent orientations for smoothing
+const MAX_ORIENTATION_HISTORY = 5;
+
+// --- WINGS CONTROLLER ---
+let wingsController = null; 
 
 // --- STATE FLAGS ---
 let isSplatAttempted = false;
@@ -24,7 +88,11 @@ let lastGoodPoseKeypoints = null; // 👈 CRITICAL: Stores the last known reliab
 
 // *** PERFORMANCE OPTIMIZATION VARIABLES ***
 const POSE_DETECTION_SKIP_FRAMES = 3; // Run AI only once every 3 frames
-let poseDetectionFrameCounter = 0; 
+let poseDetectionFrameCounter = 0;
+
+// Performance monitoring
+let segmentationInferenceTime = 0;
+let lastSegmentationInferenceStart = 0;
 // ******************************************
 
 // Smoothing variable for stable Group positioning
@@ -99,7 +167,15 @@ class DebugLogger {
     updateModelStatus(status) { if(this.modelStatus) this.modelStatus.textContent = status; }
     updatePoseStatus(status) { if(this.poseStatus) this.poseStatus.textContent = status; } 
     updateAssetStatus(status) { if(this.assetStatus) this.assetStatus.textContent = status; }
-    updateFPS(fps) { if(this.fpsCounter) this.fpsCounter.textContent = fps.toFixed(1); }
+    updateFPS(fps, segTime = 0) { 
+        if(this.fpsCounter) {
+            if (segTime > 0) {
+                this.fpsCounter.textContent = `${fps.toFixed(1)} FPS (Seg: ${segTime.toFixed(1)}ms)`;
+            } else {
+                this.fpsCounter.textContent = `${fps.toFixed(1)} FPS`;
+            }
+        }
+    }
     updatePositionStatus(posL, rotL, posR, rotR) {
         if (this.positionStatus) {
             this.positionStatus.textContent = `L P: (${posL.x.toFixed(2)}, ${posL.y.toFixed(2)}) R P: (${posR.x.toFixed(2)}, ${posR.y.toFixed(2)}) Offset: ${currentHorizontalOffset.toFixed(2)}`;
@@ -192,9 +268,21 @@ function init() {
     }
     debugLogger.log('success', 'Core libraries loaded (THREE, TF, Spark.js)');
 
-    // Start loading the heavy AI model immediately
+    // Start loading the heavy AI models immediately
     loadPoseModel().catch(err => {
         debugLogger.log('error', `FATAL: Could not load Pose Model: ${err.message}`);
+    });
+    
+    // Start loading segmentation model
+    initHumanSegmentation().then(success => {
+        if (success) {
+            segmentationReady = true;
+            debugLogger.log('success', 'Human segmentation model loaded!');
+        } else {
+            debugLogger.log('warning', 'Human segmentation model failed to load. Wings will work without occlusion.');
+        }
+    }).catch(err => {
+        debugLogger.log('error', `Could not load Segmentation Model: ${err.message}`);
     });
 
     const startBtn = document.getElementById('start-btn');
@@ -391,6 +479,18 @@ function checkSplatDataReady() {
         isSplatDataReady = true; 
         debugLogger.log('success', 'Gaussian Splat data loaded and ready!');
         debugLogger.updateAssetStatus('Gaussian Splats active');
+        
+        // Initialize WingsController once wings are loaded
+        if (wingsGroup && wingsAssetLeft && wingsAssetRight && !wingsController) {
+            wingsController = new WingsController(wingsGroup, wingsAssetLeft, wingsAssetRight, {
+                baseScale: currentWingScale,
+                offsetY: -WING_VERTICAL_SHIFT,
+                depthWhenFacingCamera: -5.5,
+                depthWhenBackToCamera: -4.5,
+            });
+            debugLogger.log('success', 'WingsController initialized');
+        }
+        
         loadedCount = 0; 
     }
 }
@@ -413,7 +513,46 @@ function createBoxWings() {
     isSplatAttempted = false;
     isSplatDataReady = true; 
     
+    // Initialize WingsController for box wings too
+    if (wingsGroup && wingsAssetLeft && wingsAssetRight && !wingsController) {
+        wingsController = new WingsController(wingsGroup, wingsAssetLeft, wingsAssetRight, {
+            baseScale: 1.2,
+            offsetY: -WING_VERTICAL_SHIFT,
+            depthWhenFacingCamera: -5.5,
+            depthWhenBackToCamera: -4.5,
+        });
+    }
+    
     debugLogger.updateAssetStatus('Box placeholder active (Fallback)');
+}
+
+/**
+ * Update segmentation mask texture for occlusion rendering
+ * @param {HTMLCanvasElement} maskCanvas - Canvas containing segmentation mask
+ */
+function updateSegmentationMaskTexture(maskCanvas) {
+    if (!maskCanvas || !threeRendererInstance) return;
+
+    try {
+        // Create or update the mask texture
+        if (!segmentationMaskTexture) {
+            segmentationMaskTexture = new THREE.CanvasTexture(maskCanvas);
+            segmentationMaskTexture.flipY = false;
+            segmentationMaskTexture.minFilter = THREE.LinearFilter;
+            segmentationMaskTexture.magFilter = THREE.LinearFilter;
+        } else {
+            // Update existing texture
+            segmentationMaskTexture.image = maskCanvas;
+            segmentationMaskTexture.needsUpdate = true;
+        }
+
+        // TODO: Use this texture in a post-processing pass or shader
+        // for proper occlusion. For now, we rely on depth-based positioning.
+        // The WingsController handles depth adjustments based on orientation.
+        
+    } catch (error) {
+        console.error('Failed to update segmentation mask texture:', error);
+    }
 }
 
 // === MAIN RENDER LOOP (OPTIMIZED AND CORRECTED) ===
@@ -422,20 +561,21 @@ async function renderLoop() {
 
     requestAnimationFrame(renderLoop);
 
-    // FPS Counter
+    // FPS Counter and Performance Monitoring
     frameCount++;
     const now = Date.now();
     if (now - lastFpsUpdate >= 1000) {
         const fps = frameCount / ((now - lastFpsUpdate) / 1000);
-        debugLogger.updateFPS(fps);
+        debugLogger.updateFPS(fps, segmentationInferenceTime);
         frameCount = 0;
         lastFpsUpdate = now;
     }
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    let wingsShouldBeVisible = false;
     let currentPoseKeypoints = lastGoodPoseKeypoints; // Start with the last known data
+    let currentSegmentationResult = null;
+    let currentOrientation = { isFacingCamera: false, isBackToCamera: false, confidence: 0 };
 
     // --- 1. THROTTLED POSE DETECTION ---
     if (video.readyState >= video.HAVE_ENOUGH_DATA && poseModel) {
@@ -477,68 +617,102 @@ async function renderLoop() {
             }
         }
     }
-    // --- END THROTTLED DETECTION ---
+    // --- END THROTTLED POSE DETECTION ---
 
+    // --- 2. THROTTLED SEGMENTATION (Runs less frequently than pose) ---
+    if (video.readyState >= video.HAVE_ENOUGH_DATA && segmentationReady && isSegmentationReady()) {
+        segmentationFrameCounter++;
+        
+        if (segmentationFrameCounter >= SEGMENTATION_SKIP_FRAMES) {
+            segmentationFrameCounter = 0;
+            lastSegmentationInferenceStart = performance.now();
+            
+            try {
+                const segResult = await runSegmentationFrame(video);
+                if (segResult) {
+                    currentSegmentationResult = segResult;
+                    
+                    // Update segmentation mask texture for occlusion
+                    updateSegmentationMaskTexture(segResult.mask);
+                    
+                    // Use segmentation-based orientation if available
+                    if (segResult.isFacingCamera !== undefined) {
+                        currentOrientation = {
+                            isFacingCamera: segResult.isFacingCamera,
+                            isBackToCamera: segResult.isBackToCamera,
+                            confidence: 0.8, // Segmentation-based orientation is more reliable
+                        };
+                    }
+                    
+                    segmentationInferenceTime = performance.now() - lastSegmentationInferenceStart;
+                }
+            } catch (err) {
+                debugLogger.log('error', `Segmentation error: ${err.message}`);
+            }
+        } else {
+            // Use last segmentation result
+            if (currentSegmentationResult && currentSegmentationResult.mask) {
+                updateSegmentationMaskTexture(currentSegmentationResult.mask);
+            }
+        }
+    }
 
-    // --- 2. POSITIONING AND RENDERING LOGIC (Runs EVERY FRAME) ---
-    if (currentPoseKeypoints && isSplatDataReady) {
-
-        wingsShouldBeVisible = true;
+    // --- 3. ORIENTATION ESTIMATION (combine pose + segmentation) ---
+    if (currentPoseKeypoints) {
+        // Get orientation from pose keypoints
+        const poseOrientation = estimateOrientationFromPose(currentPoseKeypoints);
         
-        const keypoints = currentPoseKeypoints; 
-        const leftShoulder = keypoints.find(kp => kp.name === 'left_shoulder');
-        const rightShoulder = keypoints.find(kp => kp.name === 'right_shoulder');
-
-        // 1. CALCULATE GROUP POSITION
-        const avgShoulderX = (leftShoulder.x + rightShoulder.x) / 2;
-        const avgShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
-        
-        positionWingsGroup(wingsGroup, avgShoulderX, avgShoulderY);
-        
-        // 2. CALCULATE DYNAMIC WING OFFSET 
-        const normX = (coord, dim) => (coord / dim) * 2 - 1;
-        
-        const normXLeft = normX(leftShoulder.x, video.videoWidth);
-        const normXRight = normX(rightShoulder.x, video.videoWidth);
-        
-        let sxL = normXLeft;
-        let sxR = normXRight;
-        if (CAMERA_MODE === 'user') {
-            sxL = -sxL;
-            sxR = -sxR;
+        // Prefer segmentation orientation if available, otherwise use pose orientation
+        if (currentSegmentationResult && currentSegmentationResult.isFacingCamera !== undefined) {
+            currentOrientation = {
+                isFacingCamera: currentSegmentationResult.isFacingCamera,
+                isBackToCamera: currentSegmentationResult.isBackToCamera,
+                confidence: 0.8,
+            };
+        } else {
+            currentOrientation = poseOrientation;
         }
         
-        const normalizedShoulderDistance = Math.abs(sxR - sxL);
-        let wingRootOffset = (normalizedShoulderDistance / 2.0) * SHOULDER_PIVOT_MULTIPLIER;
-        currentHorizontalOffset = Math.max(wingRootOffset, MIN_HORIZONTAL_OFFSET);
-        
-        // 3. CALCULATE GROUP ROTATION
-        const yDiff = leftShoulder.y - rightShoulder.y; 
-        let targetRotX = (yDiff / Y_DIFFERENCE_SENSITIVITY) * MAX_X_ROTATION;
-        targetRotX = THREE.MathUtils.clamp(targetRotX, -MAX_X_ROTATION, MAX_X_ROTATION);
-        
-        if (CAMERA_MODE === 'user') {
-            targetRotX = -targetRotX; 
+        // Add to history for smoothing
+        orientationHistory.push(currentOrientation);
+        if (orientationHistory.length > MAX_ORIENTATION_HISTORY) {
+            orientationHistory.shift();
         }
         
-        // Apply smoothing to rotation and position
-        wingsGroup.rotation.x += (targetRotX - wingsGroup.rotation.x) * SMOOTHING_FACTOR;
+        // Smooth orientation to avoid jitter
+        const smoothedOrientation = smoothOrientation(orientationHistory, 3);
+        currentOrientation = smoothedOrientation;
+    }
 
-        // 4. POSITION INDIVIDUAL WINGS 
-        positionIndividualWing(wingsAssetLeft, 'left');
-        positionIndividualWing(wingsAssetRight, 'right');
+    // --- 4. WING POSITIONING USING WINGSCONTROLLER ---
+    if (currentPoseKeypoints && isSplatDataReady && wingsController) {
+        // Update wings controller with pose and orientation
+        wingsController.update({
+            keypoints: currentPoseKeypoints,
+            orientation: currentOrientation,
+            segmentationMask: currentSegmentationResult ? currentSegmentationResult.mask : null,
+            videoWidth: video.videoWidth,
+            videoHeight: video.videoHeight,
+            cameraMode: CAMERA_MODE,
+        });
 
         // Draw debug points on the canvas 
-        drawDebugPoints(ctx, [leftShoulder, rightShoulder]); 
-
-        debugLogger.updatePositionStatus(wingsAssetLeft.position, wingsAssetLeft.rotation, wingsAssetRight.position, wingsAssetRight.rotation);
-    } 
-
-    // --- 3. FINAL VISIBILITY & RENDER ---
-    if (wingsAssetLeft && wingsAssetRight) {
-        // Toggle visibility based on whether we have a good pose
-        wingsAssetLeft.visible = wingsShouldBeVisible;
-        wingsAssetRight.visible = wingsShouldBeVisible;
+        const leftShoulder = currentPoseKeypoints.find(kp => kp.name === 'left_shoulder');
+        const rightShoulder = currentPoseKeypoints.find(kp => kp.name === 'right_shoulder');
+        if (leftShoulder && rightShoulder) {
+            drawDebugPoints(ctx, [leftShoulder, rightShoulder]);
+            
+            const wingOrientation = wingsController.getOrientation();
+            debugLogger.updatePositionStatus(
+                wingsAssetLeft.position, 
+                wingsAssetLeft.rotation, 
+                wingsAssetRight.position, 
+                wingsAssetRight.rotation
+            );
+        }
+    } else if (wingsController) {
+        // Hide wings if no pose detected
+        wingsController.setWingsVisible(false);
     }
 
     if (threeRendererInstance) {
