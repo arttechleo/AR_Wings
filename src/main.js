@@ -22,12 +22,13 @@ let frameCount = 0;
 let lastFpsUpdate = performance.now();
 
 
-// MVP: Minimal detection - only pose, maximum speed
+// 60fps optimization - minimal detection, maximum responsiveness
 const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-const POSE_SKIP = isMobile ? 8 : 2; // More frequent for responsiveness
+const POSE_SKIP = isMobile ? 15 : 5; // Much less frequent for 60fps - pose detection is expensive
 let poseCounter = 0;
 let videoFrameCallback = null;
+let lastVideoTime = 0;
 
 
 // Subsystems - MVP: Only what's needed
@@ -151,6 +152,25 @@ async function start() {
       video.play().catch(e => debug.log('warning', `Video play failed: ${e.message}`));
     }
     
+    // Use requestVideoFrameCallback for efficient 60fps video texture updates
+    if (video.requestVideoFrameCallback) {
+      const updateVideoTexture = (now, metadata) => {
+        if (!isRunning || !three?.videoPlane?.material?.map) return;
+        // Only update if video time actually changed (new frame)
+        if (metadata.mediaTime !== lastVideoTime) {
+          lastVideoTime = metadata.mediaTime;
+          three.videoPlane.material.map.needsUpdate = true;
+        }
+        if (isRunning) {
+          videoFrameCallback = video.requestVideoFrameCallback(updateVideoTexture);
+        }
+      };
+      videoFrameCallback = video.requestVideoFrameCallback(updateVideoTexture);
+      debug.log('info', 'Using requestVideoFrameCallback for 60fps video updates');
+    } else {
+      debug.log('warning', 'requestVideoFrameCallback not available - using fallback');
+    }
+    
     // Force first render
     if (three?.videoPlane?.material?.map) {
       three.videoPlane.material.map.needsUpdate = true;
@@ -182,6 +202,7 @@ async function restart() {
 
   // Reset counters
   poseCounter = 0;
+  lastVideoTime = 0;
 
   await start();
 }
@@ -225,12 +246,17 @@ function loop(now) {
   }
   wings.setVisible(wingsVisible);
 
-  // CRITICAL: Update video texture EVERY frame for smooth camera feed
-  if (three?.videoPlane?.material?.map && video.readyState >= video.HAVE_CURRENT_DATA) {
-    three.videoPlane.material.map.needsUpdate = true;
+  // Video texture updated via requestVideoFrameCallback (if available)
+  // Fallback: only update if video time changed (avoid expensive texture uploads)
+  if (!video.requestVideoFrameCallback && three?.videoPlane?.material?.map && video.readyState >= video.HAVE_CURRENT_DATA) {
+    const currentTime = video.currentTime;
+    if (Math.abs(currentTime - lastVideoTime) > 0.016) { // ~60fps threshold
+      lastVideoTime = currentTime;
+      three.videoPlane.material.map.needsUpdate = true;
+    }
   }
   
-  // Always render
+  // Always render - non-blocking, 60fps target
   if (three?.renderer) {
     three.renderer.render(three.scene, three.camera);
   }

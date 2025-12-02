@@ -19,7 +19,7 @@ export async function startCamera() {
           facingMode: fm, 
           width: { ideal: isIOS ? 480 : (isMobile ? 640 : 1280), min: 320 }, 
           height: { ideal: isIOS ? 360 : (isMobile ? 480 : 720), min: 240 },
-          frameRate: { ideal: 30, min: 15 } // Request 30fps minimum for smooth feed
+          frameRate: { ideal: 60, min: 30 } // Request 60fps for smooth feed
         },
         audio: false,
       });

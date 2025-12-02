@@ -235,12 +235,11 @@ export class WingsRig {
       this.right.visible = v;
       this.group.visible = v; // Ensure group is also visible
       
-      if (this.debug) {
-        // Only log when visibility changes (not every frame)
-        this.debug.log('info', `Wings visibility changed: ${v} | Splats ready: ${this.isSplatDataReady}`);
-        // Debug position when making visible
-        if (v) {
-          this.debug.log('info', `Wings visible - Group pos: (${this.group.position.x.toFixed(2)}, ${this.group.position.y.toFixed(2)}, ${this.group.position.z.toFixed(2)}) | Scale: ${this.currentScale.toFixed(2)}`);
+      // Reduced logging for 60fps - only log critical changes
+      if (this.debug && v) {
+        // Only log when making visible (throttled)
+        if (Math.random() < 0.01) { // 1% chance to log - reduces spam
+          this.debug.log('info', `Wings visible`);
         }
       }
     }
