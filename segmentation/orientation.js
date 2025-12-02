@@ -52,21 +52,40 @@ export function estimateOrientationFromPose(keypoints) {
         confidence += 0.2;
     }
 
-    // Orientation heuristics:
-    // - Face visible (nose/eyes) → likely facing camera
-    // - No face but shoulders/hips visible → might be back to camera
-    // - Shoulder width vs hip width can indicate rotation
+    // Improved orientation heuristics:
+    // - Face visible (nose/eyes) → likely facing camera (high confidence)
+    // - No face but shoulders wider than hips → likely facing camera
+    // - No face, shoulders similar to hips → likely back to camera
+    // - Ear keypoints can also help (MoveNet provides left_ear, right_ear)
 
     let isFacingCamera = false;
     let isBackToCamera = false;
 
+    const leftEar = keypoints.find(kp => kp.name === 'left_ear');
+    const rightEar = keypoints.find(kp => kp.name === 'right_ear');
+    const earVisible = (leftEar && leftEar.score > 0.4) || (rightEar && rightEar.score > 0.4);
+
     if (faceVisible) {
-        // Clear face detection → facing camera
+        // Clear face detection → facing camera (high confidence)
         isFacingCamera = true;
-        confidence = Math.min(1.0, confidence);
+        confidence = Math.min(1.0, confidence + 0.2);
+    } else if (earVisible && upperBodyVisible) {
+        // Ears visible but no face → likely side profile or slightly angled
+        // Check shoulder/hip ratio for better guess
+        if (leftShoulder && rightShoulder && leftHip && rightHip) {
+            const shoulderWidth = Math.abs(rightShoulder.x - leftShoulder.x);
+            const hipWidth = Math.abs(rightHip.x - leftHip.x);
+            
+            if (shoulderWidth > hipWidth * 1.15) {
+                isFacingCamera = true;
+                confidence = Math.min(0.7, confidence);
+            } else {
+                isBackToCamera = true;
+                confidence = Math.min(0.6, confidence);
+            }
+        }
     } else if (upperBodyVisible) {
-        // No face but upper body visible → likely back to camera
-        // Additional check: if shoulders are wider than hips, might be facing
+        // No face, no ears, but upper body visible → check geometry
         if (leftShoulder && rightShoulder && leftHip && rightHip) {
             const shoulderWidth = Math.abs(rightShoulder.x - leftShoulder.x);
             const hipWidth = Math.abs(rightHip.x - leftHip.x);
@@ -75,13 +94,13 @@ export function estimateOrientationFromPose(keypoints) {
             // When back to camera, shoulders and hips are similar width
             if (shoulderWidth > hipWidth * 1.1) {
                 isFacingCamera = true;
-                confidence = Math.min(0.8, confidence);
+                confidence = Math.min(0.75, confidence);
             } else {
                 isBackToCamera = true;
-                confidence = Math.min(0.7, confidence);
+                confidence = Math.min(0.65, confidence);
             }
-        } else {
-            // Default to back when no face is visible
+        } else if (leftShoulder && rightShoulder) {
+            // Only shoulders visible - default to back (wings on back)
             isBackToCamera = true;
             confidence = Math.min(0.6, confidence);
         }

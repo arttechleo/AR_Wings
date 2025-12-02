@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/selfie_segmentation": "^0.1.1675465747",
     "@sparkjsdev/spark": "^0.1.9",
     "@tensorflow-models/body-pix": "^2.2.1",
     "@tensorflow-models/pose-detection": "^2.1.3",

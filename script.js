@@ -3,9 +3,10 @@ import * as THREE from 'three';
 import * as tf from '@tensorflow/tfjs';
 import * as poseDetection from '@tensorflow-models/pose-detection'; 
 import { SplatMesh, SparkRenderer } from "@sparkjsdev/spark";
-import { initHumanSegmentation, runSegmentationFrame, isSegmentationReady } from './segmentation/humanSegmentation.js';
+import { initPersonSegmentation, runPersonSegmentationFrame, isPersonSegmentationReady, generateMaskFromPose } from './segmentation/personSegmentation.js';
 import { estimateOrientationFromPose, smoothOrientation } from './segmentation/orientation.js';
 import { WingsController } from './wingsController.js';
+import { OcclusionCompositor } from './render/occlusionCompositor.js';
 
 /**
  * === CURRENT AR PIPELINE SUMMARY ===
@@ -71,12 +72,13 @@ let videoBackgroundPlane;
 // --- SEGMENTATION VARIABLES ---
 let segmentationReady = false;
 let segmentationMaskTexture = null;
-let segmentationMaskPlane = null;
-let lastSegmentationTime = 0;
 let segmentationFrameCounter = 0;
-const SEGMENTATION_SKIP_FRAMES = 2; // Run segmentation every 2-3 frames for performance
+let segmentationSkipFrames = 1; // Start with every frame, can increase if FPS drops
 let orientationHistory = []; // Store recent orientations for smoothing
 const MAX_ORIENTATION_HISTORY = 5;
+
+// --- OCCLUSION COMPOSITOR ---
+let occlusionCompositor = null;
 
 // --- WINGS CONTROLLER ---
 let wingsController = null; 
@@ -87,12 +89,20 @@ let isSplatDataReady = false;
 let lastGoodPoseKeypoints = null; // 👈 CRITICAL: Stores the last known reliable pose data
 
 // *** PERFORMANCE OPTIMIZATION VARIABLES ***
-const POSE_DETECTION_SKIP_FRAMES = 3; // Run AI only once every 3 frames
+const POSE_DETECTION_SKIP_FRAMES = 6; // Run AI only once every 6 frames (increased for performance)
 let poseDetectionFrameCounter = 0;
 
 // Performance monitoring
 let segmentationInferenceTime = 0;
 let lastSegmentationInferenceStart = 0;
+
+// Debug toggle
+let DEBUG_MODE = false; // Toggle with 'D' key or ?debug=1 URL param
+
+// Adaptive performance
+let lowFpsCounter = 0;
+const LOW_FPS_THRESHOLD = 25;
+const LOW_FPS_DURATION = 3000; // 3 seconds
 // ******************************************
 
 // Smoothing variable for stable Group positioning
@@ -116,7 +126,13 @@ const MIN_HORIZONTAL_OFFSET = 0.25;
 const MAX_X_ROTATION = Math.PI / 6; 
 const Y_DIFFERENCE_SENSITIVITY = 150; 
 
-let CAMERA_MODE = 'environment'; 
+let CAMERA_MODE = 'environment';
+
+// Video resolution configuration (can be reduced for performance)
+const VIDEO_RESOLUTION = {
+    width: { ideal: 960 },  // Reduced from 1280 for better performance
+    height: { ideal: 540 }, // Reduced from 720 for better performance
+}; 
 
 // --- AR SETTINGS (FIXED VALUES) ---
 const TEST_DEPTH_Z = -5.0; 
@@ -273,16 +289,28 @@ function init() {
         debugLogger.log('error', `FATAL: Could not load Pose Model: ${err.message}`);
     });
     
-    // Start loading segmentation model
-    initHumanSegmentation().then(success => {
+    // Start loading segmentation model (MediaPipe)
+    initPersonSegmentation().then(success => {
         if (success) {
             segmentationReady = true;
-            debugLogger.log('success', 'Human segmentation model loaded!');
+            debugLogger.log('success', 'MediaPipe person segmentation model loaded!');
         } else {
-            debugLogger.log('warning', 'Human segmentation model failed to load. Wings will work without occlusion.');
+            debugLogger.log('warning', 'Person segmentation model failed to load. Wings will work without occlusion.');
         }
     }).catch(err => {
         debugLogger.log('error', `Could not load Segmentation Model: ${err.message}`);
+    });
+
+    // Check for debug mode in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    DEBUG_MODE = urlParams.get('debug') === '1';
+
+    // Keyboard shortcut for debug toggle
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'd' || e.key === 'D') {
+            DEBUG_MODE = !DEBUG_MODE;
+            debugLogger.log('info', `Debug mode: ${DEBUG_MODE ? 'ON' : 'OFF'}`);
+        }
     });
 
     const startBtn = document.getElementById('start-btn');
@@ -308,9 +336,13 @@ async function startAR() {
         ctx = canvas.getContext('2d');
         video = document.getElementById('video');
 
-        // 1. Request Camera Stream
+        // 1. Request Camera Stream (reduced resolution for performance)
         const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: CAMERA_MODE, width: { ideal: 1280 }, height: { ideal: 720 } }
+            video: { 
+                facingMode: CAMERA_MODE, 
+                width: VIDEO_RESOLUTION.width, 
+                height: VIDEO_RESOLUTION.height 
+            }
         });
         video.srcObject = stream;
         
@@ -371,6 +403,10 @@ function setupThreeJS(videoWidth, videoHeight) {
     threeRendererInstance = threeRenderer;
     
     new SparkRenderer(threeRenderer);
+
+    // Initialize occlusion compositor
+    const containerRect = threeContainer.getBoundingClientRect();
+    occlusionCompositor = new OcclusionCompositor(threeRenderer, containerRect.width, containerRect.height);
 
     if (scene) {
         if (videoBackgroundPlane) scene.remove(videoBackgroundPlane);
@@ -526,34 +562,6 @@ function createBoxWings() {
     debugLogger.updateAssetStatus('Box placeholder active (Fallback)');
 }
 
-/**
- * Update segmentation mask texture for occlusion rendering
- * @param {HTMLCanvasElement} maskCanvas - Canvas containing segmentation mask
- */
-function updateSegmentationMaskTexture(maskCanvas) {
-    if (!maskCanvas || !threeRendererInstance) return;
-
-    try {
-        // Create or update the mask texture
-        if (!segmentationMaskTexture) {
-            segmentationMaskTexture = new THREE.CanvasTexture(maskCanvas);
-            segmentationMaskTexture.flipY = false;
-            segmentationMaskTexture.minFilter = THREE.LinearFilter;
-            segmentationMaskTexture.magFilter = THREE.LinearFilter;
-        } else {
-            // Update existing texture
-            segmentationMaskTexture.image = maskCanvas;
-            segmentationMaskTexture.needsUpdate = true;
-        }
-
-        // TODO: Use this texture in a post-processing pass or shader
-        // for proper occlusion. For now, we rely on depth-based positioning.
-        // The WingsController handles depth adjustments based on orientation.
-        
-    } catch (error) {
-        console.error('Failed to update segmentation mask texture:', error);
-    }
-}
 
 // === MAIN RENDER LOOP (OPTIMIZED AND CORRECTED) ===
 async function renderLoop() {
@@ -619,59 +627,51 @@ async function renderLoop() {
     }
     // --- END THROTTLED POSE DETECTION ---
 
-    // --- 2. THROTTLED SEGMENTATION (Runs less frequently than pose) ---
-    if (video.readyState >= video.HAVE_ENOUGH_DATA && segmentationReady && isSegmentationReady()) {
+    // --- 2. THROTTLED SEGMENTATION (MediaPipe - runs every frame or every 2 frames) ---
+    let currentSegmentationResult = null;
+    if (video.readyState >= video.HAVE_ENOUGH_DATA && segmentationReady && isPersonSegmentationReady()) {
         segmentationFrameCounter++;
         
-        if (segmentationFrameCounter >= SEGMENTATION_SKIP_FRAMES) {
+        if (segmentationFrameCounter >= segmentationSkipFrames) {
             segmentationFrameCounter = 0;
             lastSegmentationInferenceStart = performance.now();
             
             try {
-                const segResult = await runSegmentationFrame(video);
-                if (segResult) {
+                const segResult = await runPersonSegmentationFrame(video);
+                if (segResult && segResult.maskTexture) {
                     currentSegmentationResult = segResult;
-                    
-                    // Update segmentation mask texture for occlusion
-                    updateSegmentationMaskTexture(segResult.mask);
-                    
-                    // Use segmentation-based orientation if available
-                    if (segResult.isFacingCamera !== undefined) {
-                        currentOrientation = {
-                            isFacingCamera: segResult.isFacingCamera,
-                            isBackToCamera: segResult.isBackToCamera,
-                            confidence: 0.8, // Segmentation-based orientation is more reliable
-                        };
-                    }
-                    
+                    segmentationMaskTexture = segResult.maskTexture;
                     segmentationInferenceTime = performance.now() - lastSegmentationInferenceStart;
                 }
             } catch (err) {
-                debugLogger.log('error', `Segmentation error: ${err.message}`);
+                if (DEBUG_MODE) debugLogger.log('error', `Segmentation error: ${err.message}`);
             }
         } else {
-            // Use last segmentation result
-            if (currentSegmentationResult && currentSegmentationResult.mask) {
-                updateSegmentationMaskTexture(currentSegmentationResult.mask);
+            // Use last segmentation result (reuse mask texture)
+            if (segmentationMaskTexture) {
+                currentSegmentationResult = { maskTexture: segmentationMaskTexture };
             }
+        }
+    } else if (currentPoseKeypoints && currentPoseKeypoints.length > 0) {
+        // Fallback: generate mask from pose keypoints
+        try {
+            const poseMask = generateMaskFromPose(currentPoseKeypoints, video.videoWidth, video.videoHeight);
+            if (poseMask) {
+                currentSegmentationResult = poseMask;
+                segmentationMaskTexture = poseMask.maskTexture;
+            }
+        } catch (err) {
+            // Ignore errors in fallback
         }
     }
 
-    // --- 3. ORIENTATION ESTIMATION (combine pose + segmentation) ---
-    if (currentPoseKeypoints) {
-        // Get orientation from pose keypoints
+    // --- 3. ORIENTATION ESTIMATION (improved with better face detection) ---
+    let currentOrientation = { isFacingCamera: false, isBackToCamera: false, confidence: 0 };
+    
+    if (currentPoseKeypoints && currentPoseKeypoints.length > 0) {
+        // Get orientation from pose keypoints (improved detection)
         const poseOrientation = estimateOrientationFromPose(currentPoseKeypoints);
-        
-        // Prefer segmentation orientation if available, otherwise use pose orientation
-        if (currentSegmentationResult && currentSegmentationResult.isFacingCamera !== undefined) {
-            currentOrientation = {
-                isFacingCamera: currentSegmentationResult.isFacingCamera,
-                isBackToCamera: currentSegmentationResult.isBackToCamera,
-                confidence: 0.8,
-            };
-        } else {
-            currentOrientation = poseOrientation;
-        }
+        currentOrientation = poseOrientation;
         
         // Add to history for smoothing
         orientationHistory.push(currentOrientation);
@@ -696,13 +696,17 @@ async function renderLoop() {
             cameraMode: CAMERA_MODE,
         });
 
-        // Draw debug points on the canvas 
-        const leftShoulder = currentPoseKeypoints.find(kp => kp.name === 'left_shoulder');
-        const rightShoulder = currentPoseKeypoints.find(kp => kp.name === 'right_shoulder');
-        if (leftShoulder && rightShoulder) {
-            drawDebugPoints(ctx, [leftShoulder, rightShoulder]);
-            
-            const wingOrientation = wingsController.getOrientation();
+        // Draw debug points only if debug mode is on
+        if (DEBUG_MODE) {
+            const leftShoulder = currentPoseKeypoints.find(kp => kp.name === 'left_shoulder');
+            const rightShoulder = currentPoseKeypoints.find(kp => kp.name === 'right_shoulder');
+            if (leftShoulder && rightShoulder) {
+                drawDebugPoints(ctx, [leftShoulder, rightShoulder]);
+            }
+        }
+        
+        const wingOrientation = wingsController.getOrientation();
+        if (DEBUG_MODE) {
             debugLogger.updatePositionStatus(
                 wingsAssetLeft.position, 
                 wingsAssetLeft.rotation, 
@@ -715,11 +719,41 @@ async function renderLoop() {
         wingsController.setWingsVisible(false);
     }
 
+    // --- 5. RENDER WITH OCCLUSION COMPOSITING ---
     if (threeRendererInstance) {
         if (videoBackgroundPlane && videoBackgroundPlane.material.map) {
             videoBackgroundPlane.material.map.needsUpdate = true;
         }
-        threeRendererInstance.render(scene, camera);
+
+        // Use occlusion compositor if mask is available
+        if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture) {
+            occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture);
+        } else {
+            // Render normally without occlusion
+            threeRendererInstance.render(scene, camera);
+        }
+    }
+
+    // --- 6. ADAPTIVE PERFORMANCE TUNING ---
+    const fps = frameCount / ((Date.now() - lastFpsUpdate) / 1000);
+    if (fps < LOW_FPS_THRESHOLD) {
+        lowFpsCounter += 16; // Approximate frame time (60fps = 16ms)
+        if (lowFpsCounter > LOW_FPS_DURATION) {
+            // Increase skip frames to reduce load
+            if (POSE_DETECTION_SKIP_FRAMES < 10) {
+                // Already handled by constant, but could be made adaptive
+            }
+            if (segmentationSkipFrames < 3) {
+                segmentationSkipFrames = 3; // Reduce segmentation frequency
+                if (DEBUG_MODE) debugLogger.log('warning', 'Performance: Reduced segmentation frequency');
+            }
+            lowFpsCounter = 0;
+        }
+    } else {
+        lowFpsCounter = Math.max(0, lowFpsCounter - 16); // Gradually reset
+        if (fps > 40 && segmentationSkipFrames > 1) {
+            segmentationSkipFrames = 1; // Can increase frequency if performance is good
+        }
     }
 }
 // === END MAIN RENDER LOOP ===
@@ -777,8 +811,9 @@ function positionIndividualWing(wing, side) {
     wing.rotation.set(baseRotX, baseRotY, targetRotZ);
 }
 
-// Draw Debug Points (OPTIMIZED)
+// Draw Debug Points (only in debug mode)
 function drawDebugPoints(ctx, keypoints) {
+    if (!DEBUG_MODE) return; // Skip if debug mode is off
     
     ctx.fillStyle = '#00ff88'; 
     keypoints.forEach(kp => {
