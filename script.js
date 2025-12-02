@@ -426,9 +426,9 @@ function setupThreeJS(videoWidth, videoHeight) {
     // Video Background Plane setup
     videoTexture = new THREE.VideoTexture(video);
     
-    // Fix video orientation for mobile devices
-    // Mobile cameras often output video that needs to be flipped
-    videoTexture.flipY = true; // Flip Y to correct mobile orientation
+    // Fix video orientation - mobile cameras output video upside down
+    // Use geometry flip instead of texture flip for more reliable results
+    videoTexture.flipY = false; // Keep texture unflipped
     
     if (CAMERA_MODE === 'user') {
         videoTexture.wrapS = THREE.RepeatWrapping; 
@@ -441,7 +441,8 @@ function setupThreeJS(videoWidth, videoHeight) {
     }
     
     const planeGeometry = new THREE.PlaneGeometry(1, 1);
-    planeGeometry.scale(1, 1, 1); // No geometry flip needed when using flipY on texture 
+    // Flip Y via geometry to fix mobile orientation (more reliable than texture flip)
+    planeGeometry.scale(1, -1, 1); 
     const planeMaterial = new THREE.MeshBasicMaterial({ map: videoTexture, side: THREE.DoubleSide, depthTest: false });
     videoBackgroundPlane = new THREE.Mesh(planeGeometry, planeMaterial);
     const viewAspect = containerRect.width / containerRect.height;
@@ -735,9 +736,14 @@ async function renderLoop() {
             videoBackgroundPlane.material.map.needsUpdate = true;
         }
 
-        // Render normally - ensure wings are visible first
-        // Occlusion compositor disabled temporarily for debugging
-        threeRendererInstance.render(scene, camera);
+        // Use occlusion compositor if segmentation is available
+        // Otherwise render normally to ensure wings are visible
+        if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
+            occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, videoTexture, wingsGroup, videoBackgroundPlane);
+        } else {
+            // Render normally - wings should be visible
+            threeRendererInstance.render(scene, camera);
+        }
     }
 
     // --- 6. ADAPTIVE PERFORMANCE TUNING ---

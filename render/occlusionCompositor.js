@@ -67,20 +67,20 @@ export class OcclusionCompositor {
                 varying vec2 vUv;
 
                 void main() {
-                    vec4 sceneColor = texture2D(wingsTexture, vUv); // Full scene (wings + video background)
-                    vec4 videoColor = texture2D(videoTexture, vUv);
+                    vec4 wingsColor = texture2D(wingsTexture, vUv);
+                    vec4 videoColor = texture2D(videoTexture, vec2(vUv.x, 1.0 - vUv.y)); // Fix video Y coordinate
                     vec4 maskColor = texture2D(maskTexture, vUv);
                     
                     // Extract mask value (white = person, black = background)
                     float maskValue = max(maskColor.r, max(maskColor.g, maskColor.a));
-                    
-                    // Determine if person is present at this pixel
                     float isPerson = step(maskThreshold, maskValue);
                     
-                    // Wings should be visible everywhere
-                    // Where person is: person (video) occludes wings - show video
-                    // Where no person: show scene (wings visible over video background)
-                    vec3 result = mix(sceneColor.rgb, videoColor.rgb, isPerson);
+                    // Goal: Wings visible but occluded by person
+                    // Where person is (isPerson = 1.0): show video (person occludes wings)
+                    // Where no person (isPerson = 0.0): show wings composited over video
+                    vec3 background = videoColor.rgb;
+                    vec3 wingsOverBg = mix(background, wingsColor.rgb, wingsColor.a);
+                    vec3 result = mix(wingsOverBg, videoColor.rgb, isPerson);
                     
                     gl_FragColor = vec4(result, 1.0);
                 }
@@ -123,16 +123,26 @@ export class OcclusionCompositor {
         const oldRenderTarget = this.renderer.getRenderTarget();
         const oldAutoClear = this.renderer.autoClear;
 
-        // Render full scene (wings + video background) to render target
+        // Render wings only (hide video plane temporarily)
+        let videoPlaneWasVisible = true;
+        if (videoPlane) {
+            videoPlaneWasVisible = videoPlane.visible;
+            videoPlane.visible = false; // Hide video for wings-only render
+        }
+
         this.renderer.autoClear = true;
-        this.renderer.setRenderTarget(this.sceneRenderTarget);
+        this.renderer.setRenderTarget(this.wingsRenderTarget);
         this.renderer.clear();
         this.renderer.render(scene, camera);
         
-        // The scene render contains both wings and video background
-        // We'll use this in the shader to composite with the mask
+        // Restore video plane visibility
+        if (videoPlane) {
+            videoPlane.visible = videoPlaneWasVisible;
+        }
+        
+        // Update shader with wings-only texture
         if (this.compositeMaterial) {
-            this.compositeMaterial.uniforms.wingsTexture.value = this.sceneRenderTarget.texture;
+            this.compositeMaterial.uniforms.wingsTexture.value = this.wingsRenderTarget.texture;
         }
 
         // Render composite to screen
