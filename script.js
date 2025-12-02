@@ -426,17 +426,9 @@ function setupThreeJS(videoWidth, videoHeight) {
     // Video Background Plane setup
     videoTexture = new THREE.VideoTexture(video);
     
-    // Handle video orientation - mobile cameras often need different handling
-    // Check if mobile device
-    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-    
-    if (isMobile) {
-        // Mobile: flip Y on texture
-        videoTexture.flipY = true;
-    } else {
-        // Desktop: flip via geometry
-        videoTexture.flipY = false;
-    }
+    // Fix video orientation for mobile devices
+    // Mobile cameras often output video that needs to be flipped
+    videoTexture.flipY = true; // Flip Y to correct mobile orientation
     
     if (CAMERA_MODE === 'user') {
         videoTexture.wrapS = THREE.RepeatWrapping; 
@@ -449,12 +441,7 @@ function setupThreeJS(videoWidth, videoHeight) {
     }
     
     const planeGeometry = new THREE.PlaneGeometry(1, 1);
-    // Scale geometry based on device type
-    if (isMobile) {
-        planeGeometry.scale(1, 1, 1); // No flip on mobile if texture is flipped
-    } else {
-        planeGeometry.scale(1, -1, 1); // Flip Y on desktop
-    } 
+    planeGeometry.scale(1, 1, 1); // No geometry flip needed when using flipY on texture 
     const planeMaterial = new THREE.MeshBasicMaterial({ map: videoTexture, side: THREE.DoubleSide, depthTest: false });
     videoBackgroundPlane = new THREE.Mesh(planeGeometry, planeMaterial);
     const viewAspect = containerRect.width / containerRect.height;
