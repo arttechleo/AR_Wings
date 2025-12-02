@@ -404,7 +404,7 @@ function setupThreeJS(videoWidth, videoHeight) {
     
     new SparkRenderer(threeRenderer);
 
-    // Initialize occlusion compositor (reuse containerRect from above)
+    // Initialize occlusion compositor (reuse existing containerRect)
     occlusionCompositor = new OcclusionCompositor(threeRenderer, containerRect.width, containerRect.height);
 
     if (scene) {
