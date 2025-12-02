@@ -404,8 +404,7 @@ function setupThreeJS(videoWidth, videoHeight) {
     
     new SparkRenderer(threeRenderer);
 
-    // Initialize occlusion compositor
-    const containerRect = threeContainer.getBoundingClientRect();
+    // Initialize occlusion compositor (reuse containerRect from above)
     occlusionCompositor = new OcclusionCompositor(threeRenderer, containerRect.width, containerRect.height);
 
     if (scene) {
@@ -628,7 +627,7 @@ async function renderLoop() {
     // --- END THROTTLED POSE DETECTION ---
 
     // --- 2. THROTTLED SEGMENTATION (MediaPipe - runs every frame or every 2 frames) ---
-    let currentSegmentationResult = null;
+    // currentSegmentationResult is already declared above
     if (video.readyState >= video.HAVE_ENOUGH_DATA && segmentationReady && isPersonSegmentationReady()) {
         segmentationFrameCounter++;
         
@@ -666,7 +665,8 @@ async function renderLoop() {
     }
 
     // --- 3. ORIENTATION ESTIMATION (improved with better face detection) ---
-    let currentOrientation = { isFacingCamera: false, isBackToCamera: false, confidence: 0 };
+    // currentOrientation is already declared above, just reset it
+    currentOrientation = { isFacingCamera: false, isBackToCamera: false, confidence: 0 };
     
     if (currentPoseKeypoints && currentPoseKeypoints.length > 0) {
         // Get orientation from pose keypoints (improved detection)
