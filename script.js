@@ -425,14 +425,14 @@ function setupThreeJS(videoWidth, videoHeight) {
 
     // Video Background Plane setup
     videoTexture = new THREE.VideoTexture(video);
-    videoTexture.flipY = false; 
+    videoTexture.flipY = false; // Keep false, we'll flip via geometry
     if (CAMERA_MODE === 'user') {
         videoTexture.wrapS = THREE.RepeatWrapping; videoTexture.offset.x = 1; videoTexture.repeat.x = -1; 
     } else {
         videoTexture.wrapS = THREE.ClampToEdgeWrapping; videoTexture.offset.x = 0; videoTexture.repeat.x = 1; 
     }
     const planeGeometry = new THREE.PlaneGeometry(1, 1);
-    planeGeometry.scale(1, -1, 1); 
+    planeGeometry.scale(1, -1, 1); // Flip Y to correct video orientation 
     const planeMaterial = new THREE.MeshBasicMaterial({ map: videoTexture, side: THREE.DoubleSide, depthTest: false });
     videoBackgroundPlane = new THREE.Mesh(planeGeometry, planeMaterial);
     const viewAspect = containerRect.width / containerRect.height;
@@ -726,14 +726,14 @@ async function renderLoop() {
             videoBackgroundPlane.material.map.needsUpdate = true;
         }
 
-        // Use occlusion compositor if mask is available
-        if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
-            // Render with proper occlusion: wings behind person
-            occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, videoTexture, wingsGroup, videoBackgroundPlane);
-        } else {
-            // Render normally without occlusion (fallback)
-            threeRendererInstance.render(scene, camera);
-        }
+        // For now, render normally - occlusion compositor needs more work
+        // Wings should be positioned at correct depth to appear behind person
+        threeRendererInstance.render(scene, camera);
+        
+        // TODO: Re-enable occlusion compositor once shader is fixed
+        // if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
+        //     occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, videoTexture, wingsGroup, videoBackgroundPlane);
+        // }
     }
 
     // --- 6. ADAPTIVE PERFORMANCE TUNING ---
