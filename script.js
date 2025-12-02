@@ -425,14 +425,36 @@ function setupThreeJS(videoWidth, videoHeight) {
 
     // Video Background Plane setup
     videoTexture = new THREE.VideoTexture(video);
-    videoTexture.flipY = false; // Keep false, we'll flip via geometry
-    if (CAMERA_MODE === 'user') {
-        videoTexture.wrapS = THREE.RepeatWrapping; videoTexture.offset.x = 1; videoTexture.repeat.x = -1; 
+    
+    // Handle video orientation - mobile cameras often need different handling
+    // Check if mobile device
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    
+    if (isMobile) {
+        // Mobile: flip Y on texture
+        videoTexture.flipY = true;
     } else {
-        videoTexture.wrapS = THREE.ClampToEdgeWrapping; videoTexture.offset.x = 0; videoTexture.repeat.x = 1; 
+        // Desktop: flip via geometry
+        videoTexture.flipY = false;
     }
+    
+    if (CAMERA_MODE === 'user') {
+        videoTexture.wrapS = THREE.RepeatWrapping; 
+        videoTexture.offset.x = 1; 
+        videoTexture.repeat.x = -1; 
+    } else {
+        videoTexture.wrapS = THREE.ClampToEdgeWrapping; 
+        videoTexture.offset.x = 0; 
+        videoTexture.repeat.x = 1; 
+    }
+    
     const planeGeometry = new THREE.PlaneGeometry(1, 1);
-    planeGeometry.scale(1, -1, 1); // Flip Y to correct video orientation 
+    // Scale geometry based on device type
+    if (isMobile) {
+        planeGeometry.scale(1, 1, 1); // No flip on mobile if texture is flipped
+    } else {
+        planeGeometry.scale(1, -1, 1); // Flip Y on desktop
+    } 
     const planeMaterial = new THREE.MeshBasicMaterial({ map: videoTexture, side: THREE.DoubleSide, depthTest: false });
     videoBackgroundPlane = new THREE.Mesh(planeGeometry, planeMaterial);
     const viewAspect = containerRect.width / containerRect.height;
@@ -726,14 +748,9 @@ async function renderLoop() {
             videoBackgroundPlane.material.map.needsUpdate = true;
         }
 
-        // Use occlusion compositor if mask is available, otherwise render normally
-        if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture && videoTexture) {
-            // Render with proper occlusion: wings visible but occluded by person
-            occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, videoTexture, wingsGroup, videoBackgroundPlane);
-        } else {
-            // Render normally without occlusion (fallback)
-            threeRendererInstance.render(scene, camera);
-        }
+        // Render normally - ensure wings are visible first
+        // Occlusion compositor disabled temporarily for debugging
+        threeRendererInstance.render(scene, camera);
     }
 
     // --- 6. ADAPTIVE PERFORMANCE TUNING ---
