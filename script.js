@@ -934,6 +934,9 @@ async function renderLoop() {
             cameraMode: CAMERA_MODE,
         });
 
+        // CRITICAL: Ensure wings are visible after controller update
+        wingsController.setWingsVisible(true);
+
         // Draw debug points only if debug mode is on
         if (DEBUG_MODE) {
             const leftShoulder = currentPoseKeypoints.find(kp => kp.name === 'left_shoulder');
@@ -952,6 +955,13 @@ async function renderLoop() {
                 wingsAssetRight.rotation
             );
         }
+    } else if (currentPoseKeypoints && isSplatDataReady && !wingsController) {
+        // If wings are ready but controller not initialized yet, still show them
+        if (wingsGroup) {
+            wingsGroup.visible = true;
+            if (wingsAssetLeft) wingsAssetLeft.visible = true;
+            if (wingsAssetRight) wingsAssetRight.visible = true;
+        }
     } else if (wingsController && !DEBUG_FORCE_WINGS_VISIBLE) {
         // Hide wings if no pose detected (unless debug force is enabled)
         wingsController.setWingsVisible(false);
@@ -963,12 +973,14 @@ async function renderLoop() {
             videoBackgroundPlane.material.map.needsUpdate = true;
         }
 
-        // Ensure wings group is visible based on debug flags or pose detection
+        // CRITICAL: Always ensure wings are visible when pose is detected and wings are ready
         const shouldShowWings = DEBUG_FORCE_WINGS_VISIBLE || 
-                                (wingsGroup && currentPoseKeypoints && currentPoseKeypoints.length > 0);
+                                (wingsGroup && isSplatDataReady && currentPoseKeypoints && currentPoseKeypoints.length > 0);
         
         if (shouldShowWings && wingsGroup) {
+            // Force visibility - this is critical for AR mode
             wingsGroup.visible = true;
+            
             // Also ensure individual wings are visible
             if (wingsAssetLeft) {
                 wingsAssetLeft.visible = true;
@@ -984,9 +996,21 @@ async function renderLoop() {
                     wingsGroup.add(wingsAssetRight);
                 }
             }
-            // Ensure wingsGroup is in the scene
+            
+            // Ensure wingsGroup is in the scene - this is critical
             if (scene && !scene.children.includes(wingsGroup)) {
                 scene.add(wingsGroup);
+            }
+            
+            // Also ensure wings controller shows wings if it exists
+            if (wingsController) {
+                wingsController.setWingsVisible(true);
+            }
+        } else if (wingsGroup && !DEBUG_FORCE_WINGS_VISIBLE) {
+            // Only hide if explicitly no pose detected
+            wingsGroup.visible = false;
+            if (wingsController) {
+                wingsController.setWingsVisible(false);
             }
         }
 
@@ -1022,6 +1046,12 @@ async function renderLoop() {
             } else if (occlusionCompositor && currentSegmentationResult && 
                       currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
                 // Fall back to segmentation-based occlusion
+                // CRITICAL: Ensure wings are visible before occlusion compositing
+                if (wingsGroup) {
+                    wingsGroup.visible = true;
+                    if (wingsAssetLeft) wingsAssetLeft.visible = true;
+                    if (wingsAssetRight) wingsAssetRight.visible = true;
+                }
                 occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, 
                     videoTexture, wingsGroup, videoBackgroundPlane);
             } else {

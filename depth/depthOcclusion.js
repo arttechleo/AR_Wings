@@ -43,11 +43,28 @@ export async function isDepthSupported() {
             }
         }
         
-        // Check for iOS ARKit bridge (if available via window.webkit)
-        if (typeof window !== 'undefined' && window.webkit?.messageHandlers?.depthData) {
+    // Check for iOS ARKit bridge (if available via window.webkit or ARKit JS bridge)
+    if (typeof window !== 'undefined') {
+        // Check for WKWebView ARKit bridge
+        if (window.webkit?.messageHandlers?.depthData) {
             depthSupported = true;
             return true;
         }
+        
+        // Check for ARKit via ARSession (iOS 11+)
+        // Note: This requires native bridge implementation in WKWebView
+        if (window.ARKitSession && typeof window.ARKitSession.getDepthData === 'function') {
+            depthSupported = true;
+            return true;
+        }
+        
+        // Check for iOS device with LiDAR capability
+        // LiDAR is available on: iPad Pro 11" (2nd gen), iPad Pro 12.9" (4th gen), iPhone 12 Pro, iPhone 12 Pro Max, and later
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        const hasLiDAR = window.DeviceMotionEvent && window.DeviceOrientationEvent;
+        // Note: Actual LiDAR detection requires native bridge or feature detection
+        // For now, we'll rely on WebXR or explicit bridge
+    }
     } catch (error) {
         // Any error means depth is not supported
         console.warn('[Depth] Error checking depth support:', error);
