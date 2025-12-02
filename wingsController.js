@@ -225,6 +225,7 @@ export class WingsController {
      * Set wings visibility
      */
     setWingsVisible(visible) {
+        if (this.wingsGroup) this.wingsGroup.visible = visible;
         if (this.leftWing) this.leftWing.visible = visible;
         if (this.rightWing) this.rightWing.visible = visible;
     }

@@ -736,14 +736,41 @@ async function renderLoop() {
             videoBackgroundPlane.material.map.needsUpdate = true;
         }
 
-        // Use occlusion compositor if segmentation is available
-        // Otherwise render normally to ensure wings are visible
-        if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
-            occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, videoTexture, wingsGroup, videoBackgroundPlane);
-        } else {
-            // Render normally - wings should be visible
-            threeRendererInstance.render(scene, camera);
+        // Ensure wings group is visible if we have pose detection
+        if (wingsGroup && currentPoseKeypoints && currentPoseKeypoints.length > 0) {
+            wingsGroup.visible = true;
+            // Also ensure individual wings are visible
+            if (wingsAssetLeft) {
+                wingsAssetLeft.visible = true;
+                // Ensure wing is in the scene
+                if (wingsGroup && !wingsGroup.children.includes(wingsAssetLeft)) {
+                    wingsGroup.add(wingsAssetLeft);
+                }
+            }
+            if (wingsAssetRight) {
+                wingsAssetRight.visible = true;
+                // Ensure wing is in the scene
+                if (wingsGroup && !wingsGroup.children.includes(wingsAssetRight)) {
+                    wingsGroup.add(wingsAssetRight);
+                }
+            }
+            // Ensure wingsGroup is in the scene
+            if (scene && !scene.children.includes(wingsGroup)) {
+                scene.add(wingsGroup);
+            }
         }
+
+        // TEMPORARILY: Render normally to ensure wings are visible
+        // TODO: Re-enable occlusion compositor once wings visibility is confirmed
+        threeRendererInstance.render(scene, camera);
+        
+        // Use occlusion compositor if segmentation is available (DISABLED FOR DEBUG)
+        // if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
+        //     occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, videoTexture, wingsGroup, videoBackgroundPlane);
+        // } else {
+        //     // Render normally - wings should be visible
+        //     threeRendererInstance.render(scene, camera);
+        // }
     }
 
     // --- 6. ADAPTIVE PERFORMANCE TUNING ---

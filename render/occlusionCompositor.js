@@ -123,6 +123,13 @@ export class OcclusionCompositor {
         const oldRenderTarget = this.renderer.getRenderTarget();
         const oldAutoClear = this.renderer.autoClear;
 
+        // Ensure wings are visible before rendering
+        let wingsGroupWasVisible = true;
+        if (wingsGroup) {
+            wingsGroupWasVisible = wingsGroup.visible;
+            wingsGroup.visible = true; // Ensure wings are visible for rendering
+        }
+
         // Render wings only (hide video plane temporarily)
         let videoPlaneWasVisible = true;
         if (videoPlane) {
@@ -130,14 +137,18 @@ export class OcclusionCompositor {
             videoPlane.visible = false; // Hide video for wings-only render
         }
 
+        // Render wings to texture
         this.renderer.autoClear = true;
         this.renderer.setRenderTarget(this.wingsRenderTarget);
         this.renderer.clear();
         this.renderer.render(scene, camera);
         
-        // Restore video plane visibility
+        // Restore visibility states
         if (videoPlane) {
             videoPlane.visible = videoPlaneWasVisible;
+        }
+        if (wingsGroup) {
+            wingsGroup.visible = wingsGroupWasVisible; // Restore original state
         }
         
         // Update shader with wings-only texture
