@@ -5,15 +5,24 @@ export function createScene({ video, container, videoPlaneDepth = -10, debug }) 
   const width = window.innerWidth || container.clientWidth || 640;
   const height = window.innerHeight || container.clientHeight || 480;
 
-  // Optimize renderer settings for mobile
+  // Optimize renderer settings for mobile - aggressive optimization for iPhone
   const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  
+  // Use optimized WebGL renderer (WebGPU not available in Three.js 0.180)
   const renderer = new THREE.WebGLRenderer({ 
     alpha: true, 
-    antialias: !isMobile, // Disable antialiasing on mobile for performance
-    powerPreference: 'high-performance'
+    antialias: false, // Always disable antialiasing for performance
+    powerPreference: 'high-performance',
+    precision: isIOS ? 'lowp' : 'mediump', // Lower precision on iOS for speed
+    stencil: false, // Disable stencil buffer if not needed
+    depth: true, // Keep depth for 3D
+    logarithmicDepthBuffer: false // Disable for performance
   });
-  // Lower pixel ratio on mobile for better performance
-  const pixelRatio = isMobile ? Math.min(window.devicePixelRatio || 1, 1.2) : Math.min(window.devicePixelRatio || 1, 2);
+  debug?.log('info', `Using optimized WebGL renderer (iOS: ${isIOS})`);
+  
+  // Lower pixel ratio on mobile for better performance (especially iOS)
+  const pixelRatio = isIOS ? 1.0 : (isMobile ? Math.min(window.devicePixelRatio || 1, 1.0) : Math.min(window.devicePixelRatio || 1, 1.5));
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height);
   renderer.setClearColor(0x000000, 0);

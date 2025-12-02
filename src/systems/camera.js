@@ -12,12 +12,14 @@ export async function startCamera() {
   const tryConstraints = async (fm) => {
     // Try with optimized resolution first (lower on mobile)
     try {
+      // Aggressive mobile optimization - lower resolution for iPhone 12 Pro
+      const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
       return await navigator.mediaDevices.getUserMedia({
         video: { 
           facingMode: fm, 
-          width: { ideal: isMobile ? 640 : 1280, min: 320 }, 
-          height: { ideal: isMobile ? 480 : 720, min: 240 },
-          frameRate: { ideal: isMobile ? 24 : 30, max: 30 } // Limit frame rate on mobile
+          width: { ideal: isIOS ? 480 : (isMobile ? 640 : 1280), min: 320 }, 
+          height: { ideal: isIOS ? 360 : (isMobile ? 480 : 720), min: 240 },
+          frameRate: { ideal: isIOS ? 20 : (isMobile ? 24 : 30), max: isIOS ? 24 : 30 } // Lower FPS on iOS
         },
         audio: false,
       });

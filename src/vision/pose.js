@@ -3,14 +3,40 @@ import * as poseDetection from '@tensorflow-models/pose-detection';
 
 export class PoseTracker {
   static async create(debug) {
-    await tf.setBackend('webgl');
-    await tf.ready();
+    // Try WebGPU first (faster on modern devices), fallback to WebGL
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    
+    try {
+      // Check if WebGPU is available
+      if (navigator.gpu && !isMobile) {
+        // WebGPU is faster but may not be available on all devices
+        await tf.setBackend('webgpu');
+        await tf.ready();
+        debug.log('info', 'Using WebGPU backend (fastest)');
+      } else {
+        // Use WebGL (more compatible)
+        await tf.setBackend('webgl');
+        await tf.ready();
+        debug.log('info', 'Using WebGL backend');
+      }
+    } catch (e) {
+      // Fallback to WebGL if WebGPU fails
+      await tf.setBackend('webgl');
+      await tf.ready();
+      debug.log('warning', `WebGPU unavailable, using WebGL: ${e.message}`);
+    }
+    
+    // Use the fastest model: MoveNet Lightning (already optimized)
     const detector = await poseDetection.createDetector(
       poseDetection.SupportedModels.MoveNet,
-      { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
+      { 
+        modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+        enableSmoothing: false, // Disable smoothing for speed
+        minPoseScore: 0.25 // Lower threshold for faster detection
+      }
     );
     const t = new PoseTracker(detector, debug);
-    debug.log('success', 'MoveNet loaded');
+    debug.log('success', `MoveNet loaded (backend: ${tf.getBackend()})`);
     return t;
   }
 

@@ -29,10 +29,12 @@ let lastFpsUpdate = performance.now();
 
 // Detection throttles - optimized for mobile (30fps target)
 const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-const POSE_SKIP = isMobile ? 10 : 3; let poseCounter = 0;
-const FACE_SKIP = isMobile ? 20 : 5; let faceCounter = 0;
-const SEGM_SKIP = isMobile ? 15 : 2; let segmCounter = 0;
+const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+const POSE_SKIP = isMobile ? 12 : 3; let poseCounter = 0;
+const FACE_SKIP = isMobile ? 30 : 5; let faceCounter = 0; // Very infrequent on mobile
+const SEGM_SKIP = isMobile ? 20 : 2; let segmCounter = 0;
 const DISABLE_SEGM_ON_MOBILE = isMobile; // Disable segmentation entirely on mobile for FPS
+const DISABLE_FACE_ON_MOBILE = isMobile; // Disable face detection on mobile (not critical)
 const RENDER_SKIP = 0; // Disabled - prefer other optimizations
 let renderCounter = 0;
 let lastSegmUpdate = 0;
@@ -66,13 +68,22 @@ window.addEventListener('DOMContentLoaded', async () => {
   setupControls();
   debug.updateStatus('Loading models...');
 
-  // Preload models in parallel
-  [pose, face, segm] = await Promise.all([
-    PoseTracker.create(debug),
-    FaceGate.create(debug),
-    Segmentation.create(debug)
-  ]);
-  debug.updateModelStatus('Pose/Face/Segm ready');
+  // Preload models - only load what's needed on mobile
+  if (DISABLE_SEGM_ON_MOBILE && DISABLE_FACE_ON_MOBILE) {
+    // Mobile: Only load pose detection (minimal features)
+    pose = await PoseTracker.create(debug);
+    face = null; // Not loaded on mobile
+    segm = null; // Not loaded on mobile
+    debug.updateModelStatus('Pose only (mobile optimized)');
+  } else {
+    // Desktop: Load all models
+    [pose, face, segm] = await Promise.all([
+      PoseTracker.create(debug),
+      FaceGate.create(debug),
+      Segmentation.create(debug)
+    ]);
+    debug.updateModelStatus('Pose/Face/Segm ready');
+  }
   debug.updateStatus('Ready - Tap Start');
 });
 
@@ -162,16 +173,9 @@ async function start() {
     wings = new WingsRig({ scene: three.scene, debug });
     await wings.loadAssets(three.renderer);
 
-    // Only create occluder if segmentation is enabled (not on mobile)
-    if (!DISABLE_SEGM_ON_MOBILE) {
-      occluder = new OcclusionMask({
-        scene: three.scene,
-        camera: three.camera,
-        depthZ: GROUP_DEPTH + 0.1, // slightly in front of wings
-        debug,
-      });
-    } else {
-      occluder = null; // No occlusion on mobile for performance
+    // Skip occlusion entirely on mobile (not critical and too slow)
+    occluder = null; // No occlusion on mobile for performance
+    if (DISABLE_SEGM_ON_MOBILE) {
       debug.log('info', 'Segmentation disabled on mobile for performance');
     }
 
@@ -250,39 +254,26 @@ function loop(now) {
     pose.estimate(video, getFacingMode()).catch(() => {});
   }
 
-  faceCounter++;
-  if (faceCounter >= FACE_SKIP) {
-    faceCounter = 0;
-    face.estimate(video, getFacingMode()).catch(() => {});
-  }
-
-  // Skip segmentation entirely on mobile for performance
-  if (!DISABLE_SEGM_ON_MOBILE) {
-    segmCounter++;
-    if (segmCounter >= SEGM_SKIP) {
-      segmCounter = 0;
-      segm.segment(video, getFacingMode()).catch(() => {});
-    }
-
-    // Update occlusion mask texture (only when segmentation runs, and less frequently)
-    if (segmCounter === 0 && (now - lastSegmUpdate > 300)) { // Only update every 300ms
-      lastSegmUpdate = now;
-      const maskCanvas = segm.getMaskCanvas();
-      if (maskCanvas) occluder.updateMask(maskCanvas, getFacingMode());
-    }
-  } else {
-    // On mobile, hide occluder to save performance
-    if (occluder?.mesh) {
-      occluder.mesh.visible = false;
+  // Skip face detection on mobile (not critical for wings)
+  if (!DISABLE_FACE_ON_MOBILE && face) {
+    faceCounter++;
+    if (faceCounter >= FACE_SKIP) {
+      faceCounter = 0;
+      face.estimate(video, getFacingMode()).catch(() => {});
     }
   }
+
+  // Skip segmentation entirely on mobile for performance (removed completely)
+  // Segmentation is too slow and not critical for wings display
 
   // Decide visibility: show wings when shoulders detected and splats ready
+  // On mobile, skip face check entirely (not needed)
   const hasShoulders = !!shoulders;
   const splatsReady = wings.isSplatDataReady();
   
   // Show wings if we have shoulders AND splat data is ready
   // Also show if we have last anchor (for smooth transitions)
+  // No face check on mobile - just shoulders
   const wingsVisible = splatsReady && (hasShoulders || wings.hasLastAnchor());
   
   // Debug visibility state (throttled to avoid spam)
@@ -300,17 +291,33 @@ function loop(now) {
       videoHeight: video.videoHeight,
       facingMode: getFacingMode(),
     });
-    // debug dots
-    drawPoint(ctx2D, left.x, left.y, '#00ff88');
-    drawPoint(ctx2D, right.x, right.y, '#00ff88');
+    // Only update 2D canvas on mobile if needed (skip debug dots for performance)
+    if (!isMobile) {
+      // Clear and draw debug dots only on desktop
+      ctx2D.clearRect(0, 0, canvas2D.width, canvas2D.height);
+      drawPoint(ctx2D, left.x, left.y, '#00ff88');
+      drawPoint(ctx2D, right.x, right.y, '#00ff88');
+    }
+  } else if (!isMobile) {
+    // Only clear on desktop when no shoulders
+    ctx2D.clearRect(0, 0, canvas2D.width, canvas2D.height);
   }
   wings.setVisible(wingsVisible);
 
   // Render 3D - optimize video texture updates
-  // Only update texture if requestVideoFrameCallback is not available (it handles updates)
-  // Otherwise, the callback handles updates automatically
-  if (!video.requestVideoFrameCallback && three?.videoPlane?.material?.map && video.readyState >= video.HAVE_CURRENT_DATA) {
-    // Only update when video actually has new frame (check timestamp)
+  // Use requestVideoFrameCallback if available (most efficient)
+  if (video.requestVideoFrameCallback && !videoFrameCallback) {
+    videoFrameCallback = () => {
+      if (three?.videoPlane?.material?.map) {
+        three.videoPlane.material.map.needsUpdate = true;
+      }
+      if (isRunning) {
+        video.requestVideoFrameCallback(videoFrameCallback);
+      }
+    };
+    video.requestVideoFrameCallback(videoFrameCallback);
+  } else if (!video.requestVideoFrameCallback && three?.videoPlane?.material?.map && video.readyState >= video.HAVE_CURRENT_DATA) {
+    // Fallback: Only update when video actually has new frame (check timestamp)
     const currentTime = video.currentTime;
     if (Math.abs(currentTime - lastVideoUpdate) > 0.01) { // Only if time changed significantly
       lastVideoUpdate = currentTime;
