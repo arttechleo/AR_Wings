@@ -430,23 +430,29 @@ function setupThreeJS(videoWidth, videoHeight) {
     // Video Background Plane setup
     videoTexture = new THREE.VideoTexture(video);
     
-    // Fix video orientation - mobile cameras output video upside down
-    // Use geometry flip instead of texture flip for more reliable results
-    videoTexture.flipY = false; // Keep texture unflipped
+    // Fix video orientation for mobile devices
+    // Mobile cameras often output video that needs to be flipped
+    const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     
+    // Standard Three.js texture settings - flipY controls vertical orientation
     if (CAMERA_MODE === 'user') {
+        // Front camera - mirror horizontally and fix vertical orientation
         videoTexture.wrapS = THREE.RepeatWrapping; 
         videoTexture.offset.x = 1; 
         videoTexture.repeat.x = -1; 
+        // For front camera, don't flip Y (video comes in correct orientation)
+        videoTexture.flipY = false;
     } else {
+        // Rear camera - standard orientation
         videoTexture.wrapS = THREE.ClampToEdgeWrapping; 
         videoTexture.offset.x = 0; 
         videoTexture.repeat.x = 1; 
+        // For rear camera on mobile, flip Y to fix upside-down issue
+        videoTexture.flipY = isMobileDevice ? true : false;
     }
     
     const planeGeometry = new THREE.PlaneGeometry(1, 1);
-    // Flip Y via geometry to fix mobile orientation (more reliable than texture flip)
-    planeGeometry.scale(1, -1, 1); 
+    // No geometry flip - handle via texture orientation only 
     const planeMaterial = new THREE.MeshBasicMaterial({ map: videoTexture, side: THREE.DoubleSide, depthTest: false });
     videoBackgroundPlane = new THREE.Mesh(planeGeometry, planeMaterial);
     const viewAspect = containerRect.width / containerRect.height;
@@ -656,8 +662,8 @@ function createPersonOcclusionPlane() {
                 }
                 
                 // Person pixel → draw the video color so it looks like the person is in front
-                // Fix video Y coordinate to match mask orientation
-                vec4 videoColor = texture2D(uVideoTexture, vec2(vUv.x, 1.0 - vUv.y));
+                // Match video texture orientation (same as video background plane)
+                vec4 videoColor = texture2D(uVideoTexture, vUv);
                 gl_FragColor = videoColor;
             }
         `,
@@ -917,19 +923,13 @@ async function renderLoop() {
             if (scene && !scene.children.includes(wingsGroup)) {
                 scene.add(wingsGroup);
             }
+        } else if (wingsGroup) {
+            // Hide wings when no pose detected
+            wingsGroup.visible = false;
         }
 
-        // TEMPORARILY: Render normally to ensure wings are visible
-        // TODO: Re-enable occlusion compositor once wings visibility is confirmed
+        // Render scene with occlusion plane - wings will be occluded by person automatically
         threeRendererInstance.render(scene, camera);
-        
-        // Use occlusion compositor if segmentation is available (DISABLED FOR DEBUG)
-        // if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
-        //     occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, videoTexture, wingsGroup, videoBackgroundPlane);
-        // } else {
-        //     // Render normally - wings should be visible
-        //     threeRendererInstance.render(scene, camera);
-        // }
     }
 
     // --- 6. ADAPTIVE PERFORMANCE TUNING ---
