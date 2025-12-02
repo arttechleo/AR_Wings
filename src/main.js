@@ -146,16 +146,9 @@ async function start() {
     window.addEventListener('resize', handleResize, { passive: true });
     handleResize(); // Initial size
     
-    // Use requestVideoFrameCallback for efficient video updates (if available)
-    if (video.requestVideoFrameCallback) {
-      const updateVideoFrame = () => {
-        if (!isRunning || !three?.videoPlane?.material?.map) return;
-        three.videoPlane.material.map.needsUpdate = true;
-        if (isRunning) {
-          videoFrameCallback = video.requestVideoFrameCallback(updateVideoFrame);
-        }
-      };
-      videoFrameCallback = video.requestVideoFrameCallback(updateVideoFrame);
+    // Ensure video is playing
+    if (video.paused) {
+      video.play().catch(e => debug.log('warning', `Video play failed: ${e.message}`));
     }
     
     // Force first render
@@ -177,7 +170,7 @@ async function restart() {
   isRunning = false;
   stopCamera();
 
-  // Clean up video frame callback if it exists
+  // Clean up video frame callback if it exists (not used in MVP but clean up anyway)
   if (videoFrameCallback && video.cancelVideoFrameCallback) {
     video.cancelVideoFrameCallback(videoFrameCallback);
     videoFrameCallback = null;
@@ -232,7 +225,12 @@ function loop(now) {
   }
   wings.setVisible(wingsVisible);
 
-  // MVP: Always render - video texture updated via callback (set in start())
+  // CRITICAL: Update video texture EVERY frame for smooth camera feed
+  if (three?.videoPlane?.material?.map && video.readyState >= video.HAVE_CURRENT_DATA) {
+    three.videoPlane.material.map.needsUpdate = true;
+  }
+  
+  // Always render
   if (three?.renderer) {
     three.renderer.render(three.scene, three.camera);
   }

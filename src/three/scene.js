@@ -48,8 +48,9 @@ export function createScene({ video, container, videoPlaneDepth = -10, debug }) 
   tex.flipY = false;
   tex.minFilter = THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
-  // Don't auto-update every frame - we'll control it manually for performance
   tex.generateMipmaps = false; // Disable mipmaps for video (not needed)
+  // CRITICAL: Auto-update every frame for smooth video feed
+  tex.needsUpdate = true;
   
   const planeGeo = new THREE.PlaneGeometry(1, 1);
   planeGeo.scale(1, -1, 1); // unflip selfie-type frames consistently
