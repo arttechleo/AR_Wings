@@ -88,20 +88,48 @@ export async function initPersonSegmentation() {
                         maskCanvas.height
                     );
 
-                    // Create or update Three.js texture
+                    // Process mask to ensure white = person, black = background
+                    // MediaPipe returns mask where white is person, so we use it directly
+                    // Convert to RGB format for better shader sampling
+                    const processedMaskCanvas = document.createElement('canvas');
+                    processedMaskCanvas.width = maskCanvas.width;
+                    processedMaskCanvas.height = maskCanvas.height;
+                    const processedCtx = processedMaskCanvas.getContext('2d');
+                    
+                    // Draw the mask (white = person)
+                    processedCtx.drawImage(maskCanvas, 0, 0);
+                    
+                    // Optional: Apply threshold and smoothing to improve mask quality
+                    const imageData = processedCtx.getImageData(0, 0, processedMaskCanvas.width, processedMaskCanvas.height);
+                    const data = imageData.data;
+                    for (let i = 0; i < data.length; i += 4) {
+                        // Ensure mask is binary: convert to pure white (person) or black (background)
+                        const gray = data[i]; // R channel
+                        const threshold = 128;
+                        const value = gray > threshold ? 255 : 0;
+                        data[i] = value;     // R
+                        data[i + 1] = value; // G
+                        data[i + 2] = value; // B
+                        data[i + 3] = 255;   // A
+                    }
+                    processedCtx.putImageData(imageData, 0, 0);
+
+                    // Create or update Three.js texture (use RGBA format for proper sampling)
                     if (!lastMaskTexture) {
-                        lastMaskTexture = new THREE.CanvasTexture(maskCanvas);
+                        lastMaskTexture = new THREE.CanvasTexture(processedMaskCanvas);
                         lastMaskTexture.flipY = false;
                         lastMaskTexture.minFilter = THREE.LinearFilter;
                         lastMaskTexture.magFilter = THREE.LinearFilter;
-                        lastMaskTexture.format = THREE.AlphaFormat;
+                        lastMaskTexture.format = THREE.RGBAFormat;
                     } else {
-                        lastMaskTexture.image = maskCanvas;
+                        lastMaskTexture.image = processedMaskCanvas;
                         lastMaskTexture.needsUpdate = true;
                     }
+                    
+                    // Store the processed canvas
+                    lastMaskCanvas = processedMaskCanvas;
 
-                    lastMaskCanvas = maskCanvas;
-                    pendingPromiseResolver({ maskTexture: lastMaskTexture, rawMask: maskCanvas });
+                    pendingPromiseResolver({ maskTexture: lastMaskTexture, rawMask: processedMaskCanvas });
                     pendingPromiseResolver = null;
                 } catch (err) {
                     console.error('Error processing segmentation results:', err);

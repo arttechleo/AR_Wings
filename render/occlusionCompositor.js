@@ -16,7 +16,14 @@ export class OcclusionCompositor {
         this.width = width;
         this.height = height;
 
-        // Create render target for scene rendering
+        // Create render targets
+        // Wings-only render target (without video background)
+        this.wingsRenderTarget = new THREE.WebGLRenderTarget(width, height, {
+            format: THREE.RGBAFormat,
+            type: THREE.UnsignedByteType,
+        });
+        
+        // Full scene render target (for fallback)
         this.sceneRenderTarget = new THREE.WebGLRenderTarget(width, height, {
             format: THREE.RGBAFormat,
             type: THREE.UnsignedByteType,
@@ -35,13 +42,15 @@ export class OcclusionCompositor {
 
     /**
      * Create shader material for occlusion compositing
+     * Properly handles: Video background + Person (from mask) + Wings (occluded by person)
      */
     createCompositeMaterial() {
         return new THREE.ShaderMaterial({
             uniforms: {
-                sceneTexture: { value: null },
+                wingsTexture: { value: null },
+                videoTexture: { value: null },
                 maskTexture: { value: null },
-                maskThreshold: { value: 0.5 },
+                maskThreshold: { value: 0.3 },
             },
             vertexShader: `
                 varying vec2 vUv;
@@ -51,32 +60,36 @@ export class OcclusionCompositor {
                 }
             `,
             fragmentShader: `
-                uniform sampler2D sceneTexture;
+                uniform sampler2D wingsTexture;
+                uniform sampler2D videoTexture;
                 uniform sampler2D maskTexture;
                 uniform float maskThreshold;
                 varying vec2 vUv;
 
                 void main() {
-                    vec4 sceneColor = texture2D(sceneTexture, vUv);
+                    vec4 wingsColor = texture2D(wingsTexture, vUv);
+                    vec4 videoColor = texture2D(videoTexture, vUv);
                     vec4 maskColor = texture2D(maskTexture, vUv);
                     
-                    // Extract alpha from mask (white = person, black = background)
-                    float maskValue = maskColor.r; // Assuming grayscale mask
+                    // Extract mask value (white = person, black = background)
+                    // Check multiple channels for robustness
+                    float maskValue = max(maskColor.r, max(maskColor.g, maskColor.a));
                     
-                    // If mask indicates person (above threshold), blend appropriately
-                    // For occlusion: if person is present, reduce wing opacity in that area
-                    float alpha = sceneColor.a;
+                    // Determine if person is present at this pixel
+                    bool isPerson = maskValue > maskThreshold;
                     
-                    if (maskValue > maskThreshold) {
-                        // Person is here - reduce wing visibility (occlude)
-                        // Keep video background visible
-                        alpha = mix(sceneColor.a, 0.0, maskValue);
+                    if (isPerson) {
+                        // Person is here - show video (person occludes wings)
+                        gl_FragColor = videoColor;
+                    } else {
+                        // No person - composite wings over video background
+                        // Alpha blend wings on top of video
+                        vec3 blendedColor = mix(videoColor.rgb, wingsColor.rgb, wingsColor.a);
+                        gl_FragColor = vec4(blendedColor, 1.0);
                     }
-                    
-                    gl_FragColor = vec4(sceneColor.rgb, alpha);
                 }
             `,
-            transparent: true,
+            transparent: false, // No transparency needed, we're doing proper compositing
         });
     }
 
@@ -91,27 +104,57 @@ export class OcclusionCompositor {
 
     /**
      * Render scene with occlusion compositing
+     * @param {THREE.Scene} scene - The 3D scene (contains video plane and wings)
+     * @param {THREE.Camera} camera - The camera
+     * @param {THREE.Texture} maskTexture - Segmentation mask texture
+     * @param {THREE.Texture} videoTexture - Video background texture
+     * @param {THREE.Object3D} wingsGroup - Wings group to render separately
+     * @param {THREE.Object3D} videoPlane - Video background plane (to exclude from wings render)
      */
-    render(scene, camera, maskTexture) {
-        if (!maskTexture) {
-            // No mask - render normally
+    render(scene, camera, maskTexture, videoTexture = null, wingsGroup = null, videoPlane = null) {
+        if (!maskTexture || !videoTexture) {
+            // No mask or video - render normally
             this.renderer.render(scene, camera);
             return;
         }
 
-        // Update mask texture
+        // Update mask and video textures
         this.updateMaskTexture(maskTexture);
+        if (this.compositeMaterial) {
+            this.compositeMaterial.uniforms.videoTexture.value = videoTexture;
+        }
 
-        // Render scene to render target
         const oldRenderTarget = this.renderer.getRenderTarget();
-        this.renderer.setRenderTarget(this.sceneRenderTarget);
-        this.renderer.render(scene, camera);
-        this.renderer.setRenderTarget(oldRenderTarget);
+        const oldAutoClear = this.renderer.autoClear;
 
-        // Update composite shader with scene texture
-        this.compositeMaterial.uniforms.sceneTexture.value = this.sceneRenderTarget.texture;
+        // Render wings only (temporarily hide video plane if provided)
+        if (wingsGroup) {
+            let videoPlaneVisible = true;
+            if (videoPlane) {
+                videoPlaneVisible = videoPlane.visible;
+                videoPlane.visible = false; // Hide video plane for wings-only render
+            }
+
+            this.renderer.autoClear = true;
+            this.renderer.setRenderTarget(this.wingsRenderTarget);
+            this.renderer.clear();
+            this.renderer.render(scene, camera);
+            
+            // Restore video plane visibility
+            if (videoPlane) {
+                videoPlane.visible = videoPlaneVisible;
+            }
+
+            // Update shader with wings texture
+            if (this.compositeMaterial) {
+                this.compositeMaterial.uniforms.wingsTexture.value = this.wingsRenderTarget.texture;
+            }
+        }
 
         // Render composite to screen
+        this.renderer.setRenderTarget(oldRenderTarget);
+        this.renderer.autoClear = oldAutoClear;
+        this.renderer.clear();
         this.renderer.render(this.compositeScene, this.compositeCamera);
     }
 
@@ -122,6 +165,7 @@ export class OcclusionCompositor {
         this.width = width;
         this.height = height;
         this.sceneRenderTarget.setSize(width, height);
+        this.wingsRenderTarget.setSize(width, height);
     }
 
     /**
@@ -130,6 +174,9 @@ export class OcclusionCompositor {
     dispose() {
         if (this.sceneRenderTarget) {
             this.sceneRenderTarget.dispose();
+        }
+        if (this.wingsRenderTarget) {
+            this.wingsRenderTarget.dispose();
         }
         if (this.compositeMaterial) {
             this.compositeMaterial.dispose();

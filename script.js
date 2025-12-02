@@ -68,6 +68,7 @@ let isRunning = false;
 let frameCount = 0;
 let lastFpsUpdate = Date.now();
 let videoBackgroundPlane;
+let videoTexture = null; // Store video texture for occlusion compositor
 
 // --- SEGMENTATION VARIABLES ---
 let segmentationReady = false;
@@ -423,7 +424,7 @@ function setupThreeJS(videoWidth, videoHeight) {
     scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
     // Video Background Plane setup
-    const videoTexture = new THREE.VideoTexture(video);
+    videoTexture = new THREE.VideoTexture(video);
     videoTexture.flipY = false; 
     if (CAMERA_MODE === 'user') {
         videoTexture.wrapS = THREE.RepeatWrapping; videoTexture.offset.x = 1; videoTexture.repeat.x = -1; 
@@ -726,10 +727,11 @@ async function renderLoop() {
         }
 
         // Use occlusion compositor if mask is available
-        if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture) {
-            occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture);
+        if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
+            // Render with proper occlusion: wings behind person
+            occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, videoTexture, wingsGroup, videoBackgroundPlane);
         } else {
-            // Render normally without occlusion
+            // Render normally without occlusion (fallback)
             threeRendererInstance.render(scene, camera);
         }
     }
