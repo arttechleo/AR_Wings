@@ -27,25 +27,30 @@ let depthTextureCache = null;
  * @returns {Promise<boolean>} True if depth sensing is available
  */
 export async function isDepthSupported() {
-    // Check for WebXR Depth Sensing support
-    if (typeof navigator !== 'undefined' && navigator.xr) {
-        try {
-            const supported = await navigator.xr.isSessionSupported('immersive-ar');
-            if (supported) {
-                // Check if depth sensing feature is available
-                // WebXR Depth Sensing API support
-                depthSupported = true;
-                return true;
+    try {
+        // Check for WebXR Depth Sensing support
+        if (typeof navigator !== 'undefined' && navigator.xr) {
+            try {
+                const supported = await navigator.xr.isSessionSupported('immersive-ar');
+                if (supported) {
+                    // WebXR Depth Sensing API support (feature detection)
+                    // Note: Actual depth data will only be available during an active XR session
+                    depthSupported = true;
+                    return true;
+                }
+            } catch (err) {
+                // WebXR not supported or error - continue checking other options
             }
-        } catch (err) {
-            console.log('[Depth] WebXR check failed:', err.message);
         }
-    }
-    
-    // Check for iOS ARKit bridge (if available via window.webkit)
-    if (typeof window !== 'undefined' && window.webkit?.messageHandlers?.depthData) {
-        depthSupported = true;
-        return true;
+        
+        // Check for iOS ARKit bridge (if available via window.webkit)
+        if (typeof window !== 'undefined' && window.webkit?.messageHandlers?.depthData) {
+            depthSupported = true;
+            return true;
+        }
+    } catch (error) {
+        // Any error means depth is not supported
+        console.warn('[Depth] Error checking depth support:', error);
     }
     
     depthSupported = false;
