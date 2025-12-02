@@ -726,14 +726,14 @@ async function renderLoop() {
             videoBackgroundPlane.material.map.needsUpdate = true;
         }
 
-        // For now, render normally - occlusion compositor needs more work
-        // Wings should be positioned at correct depth to appear behind person
-        threeRendererInstance.render(scene, camera);
-        
-        // TODO: Re-enable occlusion compositor once shader is fixed
-        // if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
-        //     occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, videoTexture, wingsGroup, videoBackgroundPlane);
-        // }
+        // Use occlusion compositor if mask is available, otherwise render normally
+        if (occlusionCompositor && currentSegmentationResult && currentSegmentationResult.maskTexture && videoTexture) {
+            // Render with proper occlusion: wings visible but occluded by person
+            occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, videoTexture, wingsGroup, videoBackgroundPlane);
+        } else {
+            // Render normally without occlusion (fallback)
+            threeRendererInstance.render(scene, camera);
+        }
     }
 
     // --- 6. ADAPTIVE PERFORMANCE TUNING ---

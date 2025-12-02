@@ -123,14 +123,14 @@ export class OcclusionCompositor {
         const oldRenderTarget = this.renderer.getRenderTarget();
         const oldAutoClear = this.renderer.autoClear;
 
-        // Render full scene (wings + video) to render target for proper depth
+        // Render full scene (wings + video background) to render target
         this.renderer.autoClear = true;
         this.renderer.setRenderTarget(this.sceneRenderTarget);
         this.renderer.clear();
         this.renderer.render(scene, camera);
         
-        // For wings-only, we'll extract wings from the scene render
-        // For now, use the full scene render and let the shader handle occlusion
+        // The scene render contains both wings and video background
+        // We'll use this in the shader to composite with the mask
         if (this.compositeMaterial) {
             this.compositeMaterial.uniforms.wingsTexture.value = this.sceneRenderTarget.texture;
         }
