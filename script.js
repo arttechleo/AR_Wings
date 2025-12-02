@@ -81,6 +81,10 @@ const MAX_ORIENTATION_HISTORY = 5;
 // --- OCCLUSION COMPOSITOR ---
 let occlusionCompositor = null;
 
+// --- PERSON OCCLUSION PLANE ---
+let personOcclusionMesh = null;
+let occlusionPlaneEnabled = true; // Toggle for debugging
+
 // --- WINGS CONTROLLER ---
 let wingsController = null; 
 
@@ -454,6 +458,8 @@ function setupThreeJS(videoWidth, videoHeight) {
     videoBackgroundPlane.renderOrder = 0; 
     scene.add(videoBackgroundPlane);
 
+    // Create person occlusion plane (will be positioned after wings are loaded)
+    // Note: We'll create it after wings are loaded to ensure proper render order
 
     // *** DUAL ASSET LOADING LOGIC ***
     if (!isSplatAttempted) {
@@ -537,6 +543,11 @@ function checkSplatDataReady() {
             debugLogger.log('success', 'WingsController initialized');
         }
         
+        // Create occlusion plane once wings are loaded
+        if (!personOcclusionMesh && videoBackgroundPlane && scene) {
+            createPersonOcclusionPlane();
+        }
+        
         loadedCount = 0; 
     }
 }
@@ -570,8 +581,141 @@ function createBoxWings() {
     }
     
     debugLogger.updateAssetStatus('Box placeholder active (Fallback)');
+    
+    // Create occlusion plane for box wings too
+    if (!personOcclusionMesh && videoBackgroundPlane && scene) {
+        createPersonOcclusionPlane();
+    }
 }
 
+/**
+ * Update segmentation mask texture from canvas
+ * Helper function to ensure mask texture is properly updated
+ */
+function updateSegmentationMaskTexture(maskCanvas) {
+    if (!maskCanvas) return;
+    
+    if (!segmentationMaskTexture) {
+        segmentationMaskTexture = new THREE.CanvasTexture(maskCanvas);
+        segmentationMaskTexture.minFilter = THREE.LinearFilter;
+        segmentationMaskTexture.magFilter = THREE.LinearFilter;
+        segmentationMaskTexture.wrapS = THREE.ClampToEdgeWrapping;
+        segmentationMaskTexture.wrapT = THREE.ClampToEdgeWrapping;
+        segmentationMaskTexture.flipY = false;
+        segmentationMaskTexture.format = THREE.RGBAFormat;
+    } else {
+        segmentationMaskTexture.image = maskCanvas;
+        segmentationMaskTexture.needsUpdate = true;
+    }
+}
+
+/**
+ * Create person occlusion plane
+ * This plane sits in front of wings but behind the person, 
+ * drawing video pixels only where the person mask indicates person presence
+ */
+function createPersonOcclusionPlane() {
+    if (!videoBackgroundPlane || !videoTexture || !scene) {
+        debugLogger.log('warning', 'Cannot create occlusion plane: missing dependencies');
+        return;
+    }
+
+    // Use same geometry as video background (clone to avoid issues)
+    const geometry = videoBackgroundPlane.geometry.clone();
+
+    const uniforms = {
+        uVideoTexture: { value: videoTexture },
+        uMaskTexture: { value: segmentationMaskTexture || new THREE.Texture() },
+        uMaskThreshold: { value: 0.5 }
+    };
+
+    const material = new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader: `
+            varying vec2 vUv;
+            void main() {
+                vUv = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `,
+        fragmentShader: `
+            varying vec2 vUv;
+            uniform sampler2D uVideoTexture;
+            uniform sampler2D uMaskTexture;
+            uniform float uMaskThreshold;
+
+            void main() {
+                // Sample mask (assuming white = person, black = background)
+                // Use R channel or average of RGB
+                vec4 maskColor = texture2D(uMaskTexture, vUv);
+                float maskValue = max(maskColor.r, max(maskColor.g, maskColor.a));
+                
+                if (maskValue < uMaskThreshold) {
+                    // Background pixel → fully transparent (don't occlude wings)
+                    discard;
+                }
+                
+                // Person pixel → draw the video color so it looks like the person is in front
+                // Fix video Y coordinate to match mask orientation
+                vec4 videoColor = texture2D(uVideoTexture, vec2(vUv.x, 1.0 - vUv.y));
+                gl_FragColor = videoColor;
+            }
+        `,
+        transparent: true,
+        depthTest: true,
+        depthWrite: false,
+        side: THREE.DoubleSide
+    });
+
+    personOcclusionMesh = new THREE.Mesh(geometry, material);
+    personOcclusionMesh.position.copy(videoBackgroundPlane.position);
+    
+    // Position occlusion plane: closer to camera than wings so person occludes wings
+    // Background z = -10 (furthest), wings ≈ -5.5 to -4.5, occlusion ≈ -4.0 (closest)
+    // In Three.js, less negative Z = closer to camera = renders on top
+    personOcclusionMesh.position.z = -4.0;
+    
+    // Use same scale as video background plane
+    personOcclusionMesh.scale.copy(videoBackgroundPlane.scale);
+    
+    // Render order: background (0) -> wings (1) -> occlusion (2)
+    videoBackgroundPlane.renderOrder = 0;
+    if (wingsGroup) wingsGroup.renderOrder = 1;
+    personOcclusionMesh.renderOrder = 2;
+    
+    // Initially hidden until mask is available
+    personOcclusionMesh.visible = false;
+    
+    scene.add(personOcclusionMesh);
+    debugLogger.log('success', 'Person occlusion plane created');
+}
+
+/**
+ * Update occlusion plane material uniforms with latest mask texture
+ */
+function updatePersonOcclusionMaterial() {
+    if (!personOcclusionMesh || !segmentationMaskTexture) {
+        if (personOcclusionMesh) {
+            personOcclusionMesh.visible = false;
+        }
+        return;
+    }
+
+    const material = personOcclusionMesh.material;
+    if (material.uniforms) {
+        if (material.uniforms.uMaskTexture.value !== segmentationMaskTexture) {
+            material.uniforms.uMaskTexture.value = segmentationMaskTexture;
+        }
+        if (material.uniforms.uVideoTexture.value !== videoTexture) {
+            material.uniforms.uVideoTexture.value = videoTexture;
+        }
+        
+        // Show occlusion plane when mask is available
+        if (occlusionPlaneEnabled) {
+            personOcclusionMesh.visible = true;
+        }
+    }
+}
 
 // === MAIN RENDER LOOP (OPTIMIZED AND CORRECTED) ===
 async function renderLoop() {
@@ -651,6 +795,12 @@ async function renderLoop() {
                 if (segResult && segResult.maskTexture) {
                     currentSegmentationResult = segResult;
                     segmentationMaskTexture = segResult.maskTexture;
+                    
+                    // Update mask texture from raw mask canvas if available
+                    if (segResult.rawMask) {
+                        updateSegmentationMaskTexture(segResult.rawMask);
+                    }
+                    
                     segmentationInferenceTime = performance.now() - lastSegmentationInferenceStart;
                 }
             } catch (err) {
@@ -669,6 +819,11 @@ async function renderLoop() {
             if (poseMask) {
                 currentSegmentationResult = poseMask;
                 segmentationMaskTexture = poseMask.maskTexture;
+                
+                // Update mask texture from raw mask canvas if available
+                if (poseMask.rawMask) {
+                    updateSegmentationMaskTexture(poseMask.rawMask);
+                }
             }
         } catch (err) {
             // Ignore errors in fallback
@@ -694,6 +849,10 @@ async function renderLoop() {
         const smoothedOrientation = smoothOrientation(orientationHistory, 3);
         currentOrientation = smoothedOrientation;
     }
+
+    // --- 3.5. UPDATE OCCLUSION PLANE ---
+    // Update occlusion plane material with latest mask texture
+    updatePersonOcclusionMaterial();
 
     // --- 4. WING POSITIONING USING WINGSCONTROLLER ---
     if (currentPoseKeypoints && isSplatDataReady && wingsController) {
