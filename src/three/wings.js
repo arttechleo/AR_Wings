@@ -257,12 +257,12 @@ export class WingsRig {
     const normX = (avgX / videoWidth) * 2 - 1;
     const normY = -(avgY / videoHeight) * 2 + 1;
 
-    // Position the group (depth fixed)
+    // Position the group (depth fixed) - MVP: Immediate updates, no smoothing
     let x = normX;
     let y = normY - WING_VERTICAL_SHIFT;
     if (facingMode === 'user') x = -x; // mirror correction
-    this.group.position.x += (x - this.group.position.x) * 0.6;
-    this.group.position.y += (y - this.group.position.y) * 0.6;
+    this.group.position.x = x; // Immediate - no smoothing for MVP
+    this.group.position.y = y; // Immediate - no smoothing for MVP
 
     // Horizontal offset between wings from shoulder span
     const nL = (left.x / videoWidth) * 2 - 1;
@@ -273,12 +273,12 @@ export class WingsRig {
     const offset = Math.max((span / 2) * SHOULDER_PIVOT_MULTIPLIER, MIN_HORIZONTAL_OFFSET);
     this.currentOffset = offset;
 
-    // Pitch from shoulder slope
+    // Pitch from shoulder slope - MVP: Immediate updates, no smoothing
     const yDiff = left.y - right.y;
     let rotX = (yDiff / Y_DIFF_SENS) * MAX_X_ROTATION;
     rotX = THREE.MathUtils.clamp(rotX, -MAX_X_ROTATION, MAX_X_ROTATION);
     if (facingMode === 'user') rotX = -rotX;
-    this.group.rotation.x += (rotX - this.group.rotation.x) * 0.6;
+    this.group.rotation.x = rotX; // Immediate - no smoothing for MVP
 
     // Scale vs display size
     const aspect = videoWidth / videoHeight;
