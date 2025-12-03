@@ -112,7 +112,8 @@ let lastSegmentationInferenceStart = 0;
 
 // Debug toggles
 let DEBUG_MODE = false; // Toggle with 'D' key or ?debug=1 URL param
-const DEBUG_DISABLE_OCCLUSION = false; // Set to true to disable occlusion plane for debugging
+// DEBUG FLAGS
+const DEBUG_DISABLE_OCCLUSION = true; // Disable occlusion for now - re-enable after wings are working
 const DEBUG_FORCE_WINGS_VISIBLE = false; // Set to true to always show wings (ignore pose/segmentation)
 
 // Adaptive performance
@@ -504,7 +505,8 @@ function setupThreeJS(videoWidth, videoHeight) {
     }
 
     // Initialize depth sensing after renderer is ready
-    tryInitDepth();
+    // TEMPORARILY DISABLED - Enable after wings are confirmed working
+    // tryInitDepth();
 }
 // === END SETUP THREE.JS ===
 
@@ -1061,32 +1063,19 @@ async function renderLoop() {
             if (wingsAssetRight) wingsAssetRight.visible = true;
         }
         
-        // Render with appropriate occlusion method
-        if (!DEBUG_DISABLE_OCCLUSION) {
-            if (useDepthOcclusion) {
-                // Use depth-based occlusion (depth occlusion mesh handles it in the scene)
-                // Wings are already visible from shouldShowWings check above
-                threeRendererInstance.render(scene, camera);
-            } else if (occlusionCompositor && currentSegmentationResult && 
-                      currentSegmentationResult.maskTexture && videoTexture && wingsGroup && shouldShowWings) {
-                // Fall back to segmentation-based occlusion
-                // CRITICAL: Wings are already visible from shouldShowWings check above
-                try {
-                    occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, 
-                        videoTexture, wingsGroup, videoBackgroundPlane);
-                } catch (error) {
-                    // If occlusion compositor fails, render normally to ensure wings show
-                    console.warn('[Occlusion] Compositor error, rendering normally:', error);
-                    threeRendererInstance.render(scene, camera);
-                }
-            } else {
-                // No occlusion - render normally (wings should be visible)
-                threeRendererInstance.render(scene, camera);
-            }
-        } else {
-            // Occlusion disabled for debugging - render normally
-            threeRendererInstance.render(scene, camera);
-        }
+        // SIMPLIFIED RENDERING - Prioritize wings visibility first
+        // Match working branch behavior: render normally to ensure wings show
+        // Occlusion can be added back later once wings are confirmed working
+        
+        // First, always render normally to ensure wings show (like working branch)
+        threeRendererInstance.render(scene, camera);
+        
+        // TODO: Re-enable occlusion compositor once wings visibility is confirmed working
+        // if (!DEBUG_DISABLE_OCCLUSION && occlusionCompositor && currentSegmentationResult && 
+        //     currentSegmentationResult.maskTexture && videoTexture && wingsGroup && shouldShowWings) {
+        //     occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, 
+        //         videoTexture, wingsGroup, videoBackgroundPlane);
+        // }
     }
 
     // --- 6. ADAPTIVE PERFORMANCE TUNING ---
