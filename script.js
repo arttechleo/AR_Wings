@@ -441,6 +441,7 @@ function setupThreeJS(videoWidth, videoHeight) {
     }
     
     wingsGroup = new THREE.Group();
+    wingsGroup.visible = true; // Start visible - will be controlled by pose detection
     scene.add(wingsGroup); 
     
     const aspect = containerRect.width / containerRect.height;
@@ -710,7 +711,8 @@ function loadSplatModels() {
                 checkSplatDataReady();
             }
         });
-        wingsAssetLeft.visible = false;
+        // Wings start visible - they'll be shown/hidden based on pose detection
+        wingsAssetLeft.visible = true; // Start visible
         wingsAssetLeft.renderOrder = 1; 
         wingsGroup.add(wingsAssetLeft);
         
@@ -722,7 +724,7 @@ function loadSplatModels() {
                 checkSplatDataReady();
             }
         });
-        wingsAssetRight.visible = false;
+        wingsAssetRight.visible = true; // Start visible
         wingsAssetRight.renderOrder = 1; 
         wingsGroup.add(wingsAssetRight);
         
@@ -740,6 +742,17 @@ function checkSplatDataReady() {
         debugLogger.log('success', 'Gaussian Splat data loaded and ready!');
         debugLogger.updateAssetStatus('Gaussian Splats active');
         
+        // CRITICAL: Ensure wings are visible when loaded
+        if (wingsGroup) {
+            wingsGroup.visible = true;
+        }
+        if (wingsAssetLeft) {
+            wingsAssetLeft.visible = true;
+        }
+        if (wingsAssetRight) {
+            wingsAssetRight.visible = true;
+        }
+        
         // Initialize WingsController once wings are loaded
         if (wingsGroup && wingsAssetLeft && wingsAssetRight && !wingsController) {
             wingsController = new WingsController(wingsGroup, wingsAssetLeft, wingsAssetRight, {
@@ -749,6 +762,8 @@ function checkSplatDataReady() {
                 depthWhenBackToCamera: -4.5,
             });
             debugLogger.log('success', 'WingsController initialized');
+            // Ensure wings are visible after controller init
+            wingsController.setWingsVisible(true);
         }
         
         loadedCount = 0; 
@@ -768,8 +783,9 @@ function createBoxWings() {
     wingsGroup.add(wingsAssetLeft);
     wingsGroup.add(wingsAssetRight);
 
-    wingsAssetLeft.visible = false;
-    wingsAssetRight.visible = false;
+    // Box wings start visible - they'll be shown/hidden based on pose detection
+    wingsAssetLeft.visible = true; // Start visible
+    wingsAssetRight.visible = true; // Start visible
     isSplatAttempted = false;
     isSplatDataReady = true; 
     
@@ -1038,22 +1054,31 @@ async function renderLoop() {
             }
         }
         
+        // CRITICAL: Final check - ensure wings are visible before rendering
+        if (shouldShowWings && wingsGroup) {
+            wingsGroup.visible = true;
+            if (wingsAssetLeft) wingsAssetLeft.visible = true;
+            if (wingsAssetRight) wingsAssetRight.visible = true;
+        }
+        
         // Render with appropriate occlusion method
         if (!DEBUG_DISABLE_OCCLUSION) {
             if (useDepthOcclusion) {
                 // Use depth-based occlusion (depth occlusion mesh handles it in the scene)
+                // Wings are already visible from shouldShowWings check above
                 threeRendererInstance.render(scene, camera);
             } else if (occlusionCompositor && currentSegmentationResult && 
-                      currentSegmentationResult.maskTexture && videoTexture && wingsGroup) {
+                      currentSegmentationResult.maskTexture && videoTexture && wingsGroup && shouldShowWings) {
                 // Fall back to segmentation-based occlusion
-                // CRITICAL: Ensure wings are visible before occlusion compositing
-                if (wingsGroup) {
-                    wingsGroup.visible = true;
-                    if (wingsAssetLeft) wingsAssetLeft.visible = true;
-                    if (wingsAssetRight) wingsAssetRight.visible = true;
+                // CRITICAL: Wings are already visible from shouldShowWings check above
+                try {
+                    occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, 
+                        videoTexture, wingsGroup, videoBackgroundPlane);
+                } catch (error) {
+                    // If occlusion compositor fails, render normally to ensure wings show
+                    console.warn('[Occlusion] Compositor error, rendering normally:', error);
+                    threeRendererInstance.render(scene, camera);
                 }
-                occlusionCompositor.render(scene, camera, currentSegmentationResult.maskTexture, 
-                    videoTexture, wingsGroup, videoBackgroundPlane);
             } else {
                 // No occlusion - render normally (wings should be visible)
                 threeRendererInstance.render(scene, camera);

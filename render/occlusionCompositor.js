@@ -123,11 +123,16 @@ export class OcclusionCompositor {
         const oldRenderTarget = this.renderer.getRenderTarget();
         const oldAutoClear = this.renderer.autoClear;
 
-        // Ensure wings are visible before rendering
-        let wingsGroupWasVisible = true;
+        // CRITICAL: Always ensure wings are visible before rendering
+        // Don't save/restore visibility - wings should always be visible when pose is detected
         if (wingsGroup) {
-            wingsGroupWasVisible = wingsGroup.visible;
-            wingsGroup.visible = true; // Ensure wings are visible for rendering
+            wingsGroup.visible = true; // Force visible - don't restore to false
+            // Also ensure individual wing meshes are visible
+            wingsGroup.traverse((child) => {
+                if (child.visible !== undefined) {
+                    child.visible = true;
+                }
+            });
         }
 
         // Render wings only (hide video plane temporarily)
@@ -143,13 +148,12 @@ export class OcclusionCompositor {
         this.renderer.clear();
         this.renderer.render(scene, camera);
         
-        // Restore visibility states
+        // Restore video plane visibility
         if (videoPlane) {
             videoPlane.visible = videoPlaneWasVisible;
         }
-        if (wingsGroup) {
-            wingsGroup.visible = wingsGroupWasVisible; // Restore original state
-        }
+        // CRITICAL: Keep wings visible - don't restore to false
+        // Wings should remain visible after occlusion compositing
         
         // Update shader with wings-only texture
         if (this.compositeMaterial) {
